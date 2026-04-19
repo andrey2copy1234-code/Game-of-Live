@@ -88,7 +88,8 @@ target_link_libraries(gameoflive
 )
 ```
 Потом с github установить файл stb_image.h и вставить в main/cpp/stb_image.h. Потом разкоментировать макрос ANDROID_MODE.
-Дальше нужно в папку main/java вставить папку main/cpp/sdl3/sdl3/android-project/app/src/main/java/org. Дальше в main/java/com.example.gameoflive/MainActivity.java вставить код: ```java package com.example.gameoflive;
+Дальше нужно в папку main/java вставить папку main/cpp/sdl3/sdl3/android-project/app/src/main/java/org. Дальше в main/java/com.example.gameoflive/MainActivity.java вставить код: 
+```java package com.example.gameoflive;
 
 import org.libsdl.app.SDLActivity;
 
