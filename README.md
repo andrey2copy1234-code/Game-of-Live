@@ -25,34 +25,27 @@ project("gameoflive")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# --- 1. ПУТИ К БИБЛИОТЕКАМ ---
 set(SDL3_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdl3/sdl3")
 set(SDL3_TTF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdl3/ttf")
 
-# --- 2. НАСТРОЙКИ SDL_TTF И ЗАВИСИМОСТЕЙ ---
 set(SDL3TTF_VENDORED ON CACHE BOOL "" FORCE)
 set(SDL3TTF_HARFBUZZ ON CACHE BOOL "" FORCE)
 set(SDL3TTF_PLUTOVG ON CACHE BOOL "" FORCE)
 set(SDL3TTF_INSTALL OFF CACHE BOOL "" FORCE)
 set(SDL3_INSTALL OFF CACHE BOOL "" FORCE)
 
-# Решаем конфликт двойного plutovg
 set(PLUTOSVG_BUILD_PLUTOVG OFF CACHE BOOL "" FORCE)
 set(PLUTOVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-# --- 3. ПРИНУДИТЕЛЬНЫЙ ОБХОД ОШИБКИ HARFBUZZ ---
-# Указываем пути к инклудам FreeType напрямую
 set(FREETYPE_INCLUDE_DIRS "${SDL3_TTF_DIR}/external/freetype/include" CACHE PATH "" FORCE)
 set(FREETYPE_INCLUDE_DIR_ft2build "${SDL3_TTF_DIR}/external/freetype/include" CACHE PATH "" FORCE)
 set(FREETYPE_INCLUDE_DIR_freetype2 "${SDL3_TTF_DIR}/external/freetype/include" CACHE PATH "" FORCE)
 
-# Обманываем систему поиска: говорим, что всё уже найдено
 set(Freetype_FOUND TRUE CACHE BOOL "" FORCE)
 set(FREETYPE_FOUND TRUE CACHE BOOL "" FORCE)
 set(HARFBUZZ_CAN_USE_FREETYPE ON CACHE BOOL "" FORCE)
 set(HB_HAVE_FREETYPE ON CACHE BOOL "" FORCE)
 
-# Создаем фиктивную цель Freetype, которую ищет HarfBuzz внутри себя
 if(NOT TARGET Freetype::Freetype)
     add_library(Freetype::Freetype INTERFACE IMPORTED)
     set_target_properties(Freetype::Freetype PROPERTIES
@@ -66,16 +59,15 @@ set(SKIP_INSTALL_LIBRARIES ON CACHE BOOL "" FORCE)
 set(SKIP_INSTALL_EXECUTABLES ON CACHE BOOL "" FORCE)
 set(SKIP_INSTALL_FILES ON CACHE BOOL "" FORCE)
 
-# Принудительно отключаем экспорт целей, который вызывает ошибку
 set(PLUTOVG_INSTALL OFF CACHE BOOL "" FORCE)
 set(PLUTOSVG_INSTALL OFF CACHE BOOL "" FORCE)
-# --- 4. ПОДКЛЮЧЕНИЕ ПОДПРОЕКТОВ ---
-# Сначала ядро SDL3
+
 add_subdirectory(${SDL3_DIR} sdl3_core)
 
-# Затем SDL_ttf
+
 add_subdirectory(${SDL3_TTF_DIR} sdl3_ttf)
-# сам проект
+
+
 add_library(gameoflive SHARED native-lib.cpp)
 
 target_include_directories(gameoflive PRIVATE
@@ -93,7 +85,7 @@ target_link_libraries(gameoflive
     ${log-lib}
     android
 )
-```3
+```
 Потом с github установить файл stb_image.h и вставить в main/cpp/stb_image.h. Потом разкоментировать макрос ANDROID_MODE.
 Дальше нужно в папку main/java вставить папку main/cpp/sdl3/sdl3/android-project/app/src/main/java/org. Дальше в main/java/com.example.gameoflive/MainActivity.java вставить код: ```java package com.example.gameoflive;
 
