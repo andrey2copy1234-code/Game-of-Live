@@ -19,7 +19,8 @@ Shift-s - остановить симуляцию
 Сначало файла есть закоментированный `#define CPU_MODE`. по умолчанию код компилируется на видиокарту но можно запустить компиляцию на процесор и для этого надо раскоментировать строку `#define CPU_MODE`. Весь код и так и так компилируется частично на видиокарте. это из-за пакета sfml.
 Рекомендуется использовать -O3 для компиляции и компилятор g++ 15.1.0+.
 ### Android
-Для компиляции на android вам необходимо установить Android Studio. создать проект Native C++. вставить в native-lib.cpp код game_of_live.cpp. установить SDL3 с github (версия 3.2) и SDL_ttf (версия 3.2). устанавлевать их в папку main/cpp/sdl3 и SDL3 устанавливать в main/cpp/sdl3/sdl3 а SDL_ttf в main/cpp/sdl3/ttf. потом вставить с CMakeLists.txt основной: ```cpp cmake_minimum_required(VERSION 3.12)
+Для компиляции на android вам необходимо установить Android Studio. создать проект Native C++. вставить в native-lib.cpp код game_of_live.cpp. установить SDL3 с github (версия 3.2) и SDL_ttf (версия 3.2). устанавлевать их в папку main/cpp/sdl3 и SDL3 устанавливать в main/cpp/sdl3/sdl3 а SDL_ttf в main/cpp/sdl3/ttf. потом вставить с CMakeLists.txt основной: 
+```java cmake_minimum_required(VERSION 3.12)
 project("gameoflive")
 
 set(CMAKE_CXX_STANDARD 20)
