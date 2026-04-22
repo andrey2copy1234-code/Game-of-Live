@@ -1,9 +1,9 @@
 // game of live on gpu and cpu
 // cd C:/Users/Azerty/Desktop/Программы/filescpp; g++ game_of_live.cpp -o game_of_live.exe -I"c:/Users/Azerty/Downloads/SFML-2.6.1/include" -L"c:/Users/Azerty/Downloads/SFML-2.6.1/lib" -lsfml-graphics-d -lsfml-window-d -lsfml-system-d -lopengl32 -lwinmm -lgdi32 -lcomdlg32 -lws2_32 -fconcepts-diagnostics-depth=2 -Wfatal-errors
-// #define ANDROID_MODE
 //#define CPU_MODE
 #ifndef ANDROID_MODE
 #include <SFML/Graphics.hpp>
+#include <optional>
 #else
 #include <GLES3/gl32.h>
 #include <GLES3/gl3ext.h>
@@ -30,32 +30,32 @@ int width = 800;
 int height = 600;
 #ifdef ANDROID_MODE
 const char* vertex_shader_code = "#version 310 es\n"
-"layout(location = 0) in vec2 pos;\n"
-"layout(location = 1) in vec4 color;\n"
-"layout(location = 2) in vec2 texCoord;\n" // Принимаем UV
-"out vec4 vColor;\n"
-"out vec2 vTexCoord;\n"
-"uniform vec2 u_res;\n"
-"void main() {\n"
-"    gl_Position = vec4((pos.x / u_res.x * 2.0) - 1.0, (pos.y / u_res.y * -2.0) + 1.0, 0.0, 1.0);\n"
-"    vColor = color;\n"
-"    vTexCoord = texCoord;\n"
-"}\n";
+                                 "layout(location = 0) in vec2 pos;\n"
+                                 "layout(location = 1) in vec4 color;\n"
+                                 "layout(location = 2) in vec2 texCoord;\n" // Принимаем UV
+                                 "out vec4 vColor;\n"
+                                 "out vec2 vTexCoord;\n"
+                                 "uniform vec2 u_res;\n"
+                                 "void main() {\n"
+                                 "    gl_Position = vec4((pos.x / u_res.x * 2.0) - 1.0, (pos.y / u_res.y * -2.0) + 1.0, 0.0, 1.0);\n"
+                                 "    vColor = color;\n"
+                                 "    vTexCoord = texCoord;\n"
+                                 "}\n";
 
 const char* fragment_shader_code = "#version 310 es\n"
-"precision highp float;\n"
-"in vec4 vColor;\n"
-"in vec2 vTexCoord;\n"
-"out vec4 fragColor;\n"
-"uniform sampler2D u_texture;\n" // Текстура атласа
-"uniform int u_useTexture;\n"   // Флаг: 1 - текст, 0 - клетки
-"void main() {\n"
-"    if (u_useTexture == 1) {\n"
-"        fragColor = texture(u_texture, vTexCoord) * vColor;\n"
-"    } else {\n"
-"        fragColor = vColor;\n"
-"    }\n"
-"}\n";
+                                   "precision highp float;\n"
+                                   "in vec4 vColor;\n"
+                                   "in vec2 vTexCoord;\n"
+                                   "out vec4 fragColor;\n"
+                                   "uniform sampler2D u_texture;\n" // Текстура атласа
+                                   "uniform int u_useTexture;\n"   // Флаг: 1 - текст, 0 - клетки
+                                   "void main() {\n"
+                                   "    if (u_useTexture == 1) {\n"
+                                   "        fragColor = texture(u_texture, vTexCoord) * vColor;\n"
+                                   "    } else {\n"
+                                   "        fragColor = vColor;\n"
+                                   "    }\n"
+                                   "}\n";
 GLuint graphicsProgramID = 0;
 
 void startAndroidSFML() {
@@ -274,6 +274,7 @@ namespace sf {
             glDisableVertexAttribArray(0);
             glDisableVertexAttribArray(1);
             glDisableVertexAttribArray(2);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
         }
     };
     class RectangleShape {
@@ -291,7 +292,7 @@ namespace sf {
         }
     public:
         RectangleShape(const sf::Vector2f& size = sf::Vector2f(0, 0))
-            : m_vertices(sf::Quads), m_size(size), m_color(sf::Color::White) {
+                : m_vertices(sf::Quads), m_size(size), m_color(sf::Color::White) {
             m_vertices.resize(4);
         }
         void setTexture() {
@@ -506,7 +507,7 @@ namespace sf {
         sf::Vector2f m_position;
 
     public:
-        ConvexShape(size_t pointCount = 0) : m_vertices(sf::TriangleFan), m_color(sf::Color::White) {
+        ConvexShape(size_t pointCount = 0) : m_vertices(sf::TriangleFan), m_color(sf::Color::White), m_position(sf::Vector2f(0, 0)) {
             m_vertices.resize(pointCount);
         }
 
@@ -527,6 +528,37 @@ namespace sf {
 
         void render() {
             m_vertices.render();
+        }
+    };
+    class CircleShape {
+    private:
+        sf::ConvexShape cnvsh;
+        sf::Vector2f pos;
+        sf::Vector2f size;
+        sf::Color col;
+        void updateGeometry() {
+            float deg = 3.1415/180*360/30;
+
+            for (int i = 0; i!=30; i++) {
+                float curr_deg = deg*i;
+                cnvsh.setPoint(i, pos+sf::Vector2f(size.x*0.5+sin(curr_deg)*size.x*0.5, size.y*0.5+cos(curr_deg)*size.x*0.5));
+            }
+            cnvsh.setFillColor(col);
+        }
+    public:
+        CircleShape(): cnvsh(30) {}
+        void setPosition(sf::Vector2f pos) {
+            this->pos = pos;
+        }
+        void setSize(sf::Vector2f size) {
+            this->size = size;
+        }
+        void setFillColor(sf::Color col) {
+            this->col =col;
+        }
+        void render() {
+            updateGeometry();
+            cnvsh.render();
         }
     };
 };
@@ -558,7 +590,7 @@ inline sf::Vector2f calc_pos(int x, int y, double gbs) {
     return sf::Vector2f(px, py);
 }
 
-inline int calc_size_px() {
+inline float calc_size_px() {
     return (int)(get_base_scale() * scale);
 }
 inline int calc_size_ssbo() {
@@ -775,7 +807,7 @@ const char* shader_code = R"(#version 310 es
 precision highp float;
 precision highp int;
 #extension GL_ES_310_extensions : enable
-layout(local_size_x = 64) in;
+layout(local_size_x = 16, local_size_y = 16) in;
 // Тот самый буфер (binding = 0), который мы привязывали в C++
 layout(std430, binding = 0) readonly buffer InBuffer {
     uint ceils_in[];
@@ -788,7 +820,7 @@ layout(std430, binding = 1) coherent buffer OutBuffer {
 const char* shader_code = R"(#version 430 core
 #extension GL_ARB_compute_shader : enable
 #extension GL_ARB_shader_storage_buffer_object : enable
-layout(local_size_x = 64) in;
+layout(local_size_x = 16, local_size_y = 16) in;
 // Тот самый буфер (binding = 0), который мы привязывали в C++
 layout(std430, binding = 0) buffer InBuffer {
     uint ceils_in[];
@@ -799,7 +831,7 @@ layout(std430, binding = 1) buffer OutBuffer {
 )"
 #endif
 R"(
-uniform uint total;
+//uniform uint total;
 uniform uint sizexy;
 uint get_index(uint index) {
     return (ceils_in[index/32u]>>(index%32u)) & 1u;
@@ -814,31 +846,42 @@ void set_index(uint index, uint val) {
     }
 }
 void main() {
-    uint id = gl_GlobalInvocationID.x;
-    if (id >= total) return;
-    uint x = id % sizexy;
-    uint y = id / sizexy;
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    if (x >= sizexy || y >= sizexy) return;
+    uint id = x+y*sizexy;
+    //uint x = id % sizexy;
+    //uint y = id / sizexy;
     uint neighbors = 0u;
-    if (x > 0u && get_index(y*sizexy + (x-1u)) == 1u) neighbors++; // лево
-    if (x+1u < sizexy && get_index(y*sizexy + (x+1u)) == 1u) neighbors++; // право
-    if (y+1u < sizexy) {
-        if (get_index((y+1u)*sizexy + x) == 1u) neighbors++; // низ
-        if (x > 0u && get_index((y+1u)*sizexy + (x-1u)) == 1u) neighbors++; // низ-лево
-        if (x+1u < sizexy && get_index((y+1u)*sizexy + (x+1u)) == 1u) neighbors++; // низ-право
-    }
+    neighbors += uint(x > 0u && get_index(y*sizexy + (x-1u)) == 1u);
+    //if (x > 0u && get_index(y*sizexy + (x-1u)) == 1u) neighbors++; // лево
+    neighbors += uint(x+1u < sizexy && get_index(y*sizexy + (x+1u)) == 1u);
+    //if (x+1u < sizexy && get_index(y*sizexy + (x+1u)) == 1u) neighbors++; // право
+    //if (y+1u < sizexy) {
+    neighbors += uint(y+1u < sizexy && get_index((y+1u)*sizexy + x) == 1u);
+    //    if (get_index((y+1u)*sizexy + x) == 1u) neighbors++; // низ
+    neighbors += uint(y+1u < sizexy && x > 0u && get_index((y+1u)*sizexy + (x-1u)) == 1u);
+    //    if (x > 0u && get_index((y+1u)*sizexy + (x-1u)) == 1u) neighbors++; // низ-лево
+    neighbors += uint(y+1u < sizexy && x+1u < sizexy && get_index((y+1u)*sizexy + (x+1u)) == 1u);
+    //    if (x+1u < sizexy && get_index((y+1u)*sizexy + (x+1u)) == 1u) neighbors++; // низ-право
+    //}
 
-    if (y > 0u) {
-        if (get_index((y-1u)*sizexy + x) == 1u) neighbors++; // верх
-        if (x > 0u && get_index((y-1u)*sizexy + (x-1u)) == 1u) neighbors++; // верх-лево
-        if (x+1u < sizexy && get_index((y-1u)*sizexy + (x+1u)) == 1u) neighbors++; // верх-право
-    }
+    //if (y > 0u) {
+    neighbors += uint(y > 0u && get_index((y-1u)*sizexy + x) == 1u);
+    //    if (get_index((y-1u)*sizexy + x) == 1u) neighbors++; // верх
+    neighbors += uint(y > 0u && x > 0u && get_index((y-1u)*sizexy + (x-1u)) == 1u);
+    //    if (x > 0u && get_index((y-1u)*sizexy + (x-1u)) == 1u) neighbors++; // верх-лево
+    neighbors += uint(y > 0u && x+1u < sizexy && get_index((y-1u)*sizexy + (x+1u)) == 1u);
+    //    if (x+1u < sizexy && get_index((y-1u)*sizexy + (x+1u)) == 1u) neighbors++; // верх-право
+    //}
     uint current = get_index(id);
-    uint result = 0u;
-    if (current == 1u) {
-        if (neighbors == 2u || neighbors == 3u) result = 1u; // Выжил
-    } else {
-        if (neighbors == 3u) result = 1u; // Родился
-    }
+    //uint result = 0u;
+    uint result = uint(neighbors == 3u || (current == 1u && neighbors == 2u));
+    //if (current == 1u) {
+    //    if (neighbors == 2u || neighbors == 3u) result = 1u; // Выжил
+    //} else {
+    //    if (neighbors == 3u) result = 1u; // Родился
+    //}
     set_index(id, result);
 }
 )"
@@ -858,6 +901,13 @@ inline void set_index(std::vector<uint32_t>& ceils, uint32_t index, bool val) {
 #endif
 #ifdef ANDROID_MODE
 SDL_Rect safeArea;
+#else
+struct rect_struct {
+    int x = 0; int y = 0;
+    int w = 800; int h = 600;
+};
+rect_struct safeArea = {0, 0, 800, 600};
+#endif
 sf::ConvexShape createRoundedRect(float width, float height, float radius) {
     sf::ConvexShape shape;
     unsigned int quality = 10; // Сколько точек на угол
@@ -886,25 +936,114 @@ sf::Text createTextForButton(std::string str, sf::Vector2f pos, float width, flo
     text.setFont(defaultFont);
     text.setCharacterSize(size_char);
     text.setString(str);
-    text.setPosition(pos.x+radius+(width-size_char/1.5*str.length())*0.5, pos.y+radius+(height-size_char)*0.5);
+    text.setPosition(sf::Vector2f(pos.x+radius+(width-size_char/1.5*str.length())*0.5, pos.y+radius+(height-size_char)*0.5));
+    // text.setFillColor(sf::Color(83, 243, 23));
     return text;
 }
 bool is_click_button(sf::Vector2f pos, sf::Vector2f size, sf::Vector2f click) {
     return pos.x<=click.x && click.x<=pos.x+size.x && pos.y<=click.y && click.y<=pos.y+size.y;
 }
+
+class Slider {
+private:
+    sf::Vector2f pos;
+    sf::Vector2f size;
+    float degree = 1.5;
+    int max_val;
+    sf::Color line_color;
+    sf::Color circle_color;
+public:
+    Slider(int max_val) : max_val(max_val) {}
+
+    void setLineColor(sf::Color col) {
+        line_color = col;
+    }
+
+    void setCircleColor(sf::Color col) {
+        circle_color = col;
+    }
+
+    void setPosition(sf::Vector2f pos) {
+        this->pos = pos;
+    }
+
+    void setSize(sf::Vector2f size) {
+        this->size = size;
+    }
+
+#ifdef ANDROID_MODE
+
+    void render(int value) {
+#else
+        void render(sf::RenderWindow& window, int value) {
 #endif
+        sf::Vector2f pos_circle = sf::Vector2f(
+                (value < max_val ? std::pow(value, 1 / degree) / std::pow(max_val, 1 / degree) *
+                                   size.x : size.x), 0) + pos;
+        float size_circle = size.y * 2;
+        auto line = createRoundedRect(size.x, size.y, size.y * 0.5);
+        line.setPosition(pos);
+        line.setFillColor(line_color);
+#ifdef ANDROID_MODE
+        line.render();
+#else
+        window.draw(line);
+#endif
+#ifdef ANDROID_MODE
+        sf::CircleShape circle;
+#else
+        sf::CircleShape circle(size_circle/2);
+#endif
+        circle.setPosition(pos_circle - sf::Vector2f(size_circle * 0.5, size_circle * 0.25));
+#ifdef ANDROID_MODE
+        circle.setSize(sf::Vector2f(size_circle, size_circle));
+#endif
+        circle.setFillColor(circle_color);
+#ifdef ANDROID_MODE
+        circle.render();
+#else
+        window.draw(circle);
+#endif
+    }
+
+#ifdef ANDROID_MODE
+    std::optional<int> event_to(int count, SDL_Finger **fingers) {
+        if (count == 1) {
+            if (is_click_button(pos - sf::Vector2f(0, size.y * 0.5), size + sf::Vector2f(0, size.y),
+                                sf::Vector2f(fingers[0]->x * width, fingers[0]->y * height))) {
+                return std::pow((fingers[0]->x * width - pos.x) / size.x, degree) * max_val;
+            }
+        }
+        return std::nullopt;
+    }
+
+#else
+    std::optional<int> event_to(sf::Event event) {
+        if (event.type==sf::Event::MouseMoved && sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
+            if (is_click_button(pos-sf::Vector2f(0, size.y*0.5), size+sf::Vector2f(0, size.y), sf::Vector2f(event.mouseMove.x, event.mouseMove.y))) {
+                return std::pow((event.mouseMove.x - pos.x) / size.x, degree) * max_val;
+            }
+        }
+        return std::nullopt;
+    }
+#endif
+};
 int sps = 5;
 #ifndef ANDROID_MODE
 int main() {
 #else
-    int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) {
 #endif
 #ifndef ANDROID_MODE
-        defaultFont.loadFromFile("C:/Windows/Fonts/arial.ttf");
+    defaultFont.loadFromFile("C:/Windows/Fonts/arial.ttf");
 #endif
+    bool is_all_buttons = false;
 #ifndef ANDROID_MODE
-        sf::RenderWindow window(sf::VideoMode(800, 600), "Game Of Live (FPS=30)");
-        window.setFramerateLimit(30);
+    sf::RenderWindow window(sf::VideoMode(800, 600), "Game Of Live (FPS=30)");
+    window.setFramerateLimit(30);
+    safeArea.w = width;
+    safeArea.h = height;
+    sf::Vector2f lastMousePos = sf::Vector2f(-1, -1);
 #else
     //SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown");
 
@@ -913,7 +1052,7 @@ int main() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     //SDL_Window *window = SDL_CreateWindow("Game of Live", 0, 0,SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE);
-        SDL_Window *window = SDL_CreateWindow("Game of Live", 0, 0,SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN);
+    SDL_Window *window = SDL_CreateWindow("Game of Live", 0, 0,SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN);
     SDL_GLContext context = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, context);
     SDL_GL_SetSwapInterval(0);
@@ -949,7 +1088,6 @@ int main() {
     SDL_Log("time first screen: %d ms", (int)clock_start.restart().get_direction());
     float lastDist = 0;
     float lastDelay = 0;
-    bool is_all_buttons = false;
     if (!defaultFont.loadFromFile("arial.ttf")) {
         SDL_Log("file \"arial.ttf\" not found");
     }
@@ -961,9 +1099,9 @@ int main() {
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, 100);
 #ifdef CPU_MODE
-    #ifdef ANDROID_MODE
+#ifdef ANDROID_MODE
     loadGPUFunctions();
-    #endif
+#endif
 #endif
 #ifndef CPU_MODE
     loadGPUFunctions();
@@ -979,8 +1117,8 @@ int main() {
     updateSSBOData(ssboIn, ceils);
 #endif
 #ifdef CPU_MODE
-    #define WRITE_CEILS (active? ceils: ceils2)
-    #define READ_CEILS (active? ceils2: ceils)
+#define WRITE_CEILS (active? ceils: ceils2)
+#define READ_CEILS (active? ceils2: ceils)
     std::vector<bool> ceils(size*size);
     std::vector<bool> ceils2(size*size);
     for (int i = 0; i!=ceils.size(); i++) {
@@ -992,17 +1130,27 @@ int main() {
     double last_simulate = 0;
     std::vector<std::pair<sf::Vector2f, bool>> rects;
     sf::VertexArray vex(sf::Quads);
+    Slider slider_sps(100);
+    slider_sps.setPosition(sf::Vector2f(0, 0));
+    slider_sps.setSize(sf::Vector2f(0, 0));
+    slider_sps.setLineColor(sf::Color(50, 100, 200));
+    slider_sps.setCircleColor(sf::Color(50, 200, 50));
 #ifdef ANDROID_MODE
     bool runing = true;
     while (runing) {
 #else
-    while (window.isOpen()) {
+        while (window.isOpen()) {
 #endif
 #ifndef ANDROID_MODE
         sf::Event event;
         while (window.pollEvent(event)) {
+            std::optional<int> new_sps = slider_sps.event_to(event);
+            if (new_sps) {
+                sps = *new_sps;
+                continue;
+            }
 #else
-            SDL_Event event;
+        SDL_Event event;
         while (SDL_PollEvent(&event)) {
 #endif
 #ifndef ANDROID_MODE
@@ -1036,47 +1184,56 @@ int main() {
                 }
             }
 #else
-            else if (event.type==sf::Event::Resized) {
+                else if (event.type==sf::Event::Resized) {
                 sf::FloatRect visibleArea(0.f, 0.f, event.size.width, event.size.height);
                 width = event.size.width;
                 height = event.size.height;
+                safeArea.w = width;
+                safeArea.h = height;
                 window.setView(sf::View(visibleArea));
                 clock.restart();
                 clock_simulate.restart();
             }
 #endif
 #ifndef ANDROID_MODE
-            else if (event.type==sf::Event::MouseButtonPressed) {
+                else if (event.type==sf::Event::MouseButtonPressed) {
                 const sf::Vector2f click_pos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
 #else
-            else if (event.type == SDL_EVENT_FINGER_DOWN) {
+            else if (event.type == SDL_EVENT_FINGER_UP) {
+                lastDist = 0;
+            } else if (event.type == SDL_EVENT_FINGER_DOWN) {
                 const sf::Vector2f click_pos = sf::Vector2f(event.tfinger.x * width, event.tfinger.y * height);
 #endif
-#ifdef ANDROID_MODE
+//#ifdef ANDROID_MODE
                 float buttonsWidth = safeArea.w*0.5;
                 float buttonsHeight = safeArea.h*0.1;
-                sf::Vector2f pos_rect1 = sf::Vector2f(safeArea.x, safeArea.h*0.9+safeArea.y);
-                sf::Vector2f pos_rect2 = sf::Vector2f(safeArea.x+safeArea.w*0.5, safeArea.h*0.9+safeArea.y);
+                float size_button_all = std::min(safeArea.w, safeArea.h)*0.1;
+                sf::Vector2f pos_rect_random = sf::Vector2f(safeArea.x, safeArea.h*0.9+safeArea.y);
+                sf::Vector2f pos_rect_run_stop = sf::Vector2f(safeArea.x+safeArea.w*0.5, safeArea.h*0.9+safeArea.y);
+#ifdef ANDROID_MODE
+                sf::Vector2f pos_rect_all = sf::Vector2f(safeArea.w-size_button_all*1.1+safeArea.x, size_button_all*0.1+safeArea.y+safeArea.h*0.05);
+#else
+                sf::Vector2f pos_rect_all = sf::Vector2f(safeArea.w-size_button_all*1.1+safeArea.x, size_button_all*0.1+safeArea.y);
+#endif
                 sf::Vector2f pos_rect_resize = sf::Vector2f(safeArea.x + safeArea.w * 0.25,safeArea.h * 0.1 + safeArea.y);
                 sf::Vector2f pos_rect_clear = pos_rect_resize+sf::Vector2f(0, safeArea.h*0.12);
-                sf::Vector2f pos_rect_run_stop = pos_rect_clear+sf::Vector2f(0, safeArea.h*0.12);
-                sf::Vector2f pos_rect_change_sps = pos_rect_run_stop+sf::Vector2f(0, safeArea.h*0.12);
-                if (is_click_button(pos_rect1, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // random button
+                sf::Vector2f pos_rect_change_sps = pos_rect_clear+sf::Vector2f(0, safeArea.h*0.12);
+                if (is_click_button(pos_rect_random, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // random button
                     for (int i = 0; i!=size*size; i++) {
-                        #ifdef CPU_MODE
+#ifdef CPU_MODE
                         READ_CEILS[i] = dis(gen)<=37;
-                        #endif
-                        #ifndef CPU_MODE
+#endif
+#ifndef CPU_MODE
                         // ceils[i] = dis(gen);
                         set_index(ceils, i, dis(gen)<=37);
-                        #endif
+#endif
                     }
-                    #ifndef CPU_MODE
+#ifndef CPU_MODE
                     updateSSBOData(SSBO_IN, ceils);
-                    #endif
+#endif
                     clock_simulate.restart();
                     clock.restart();
-                } else if (is_click_button(pos_rect2, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // all button
+                } else if (is_click_button(pos_rect_all, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // all button
                     is_all_buttons = !is_all_buttons;
                 } else if (is_all_buttons && is_click_button(pos_rect_resize, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // resize button
                     int new_size = getNumber("enter", "enter size: ", window);
@@ -1120,7 +1277,7 @@ int main() {
 #endif
                     clock_simulate.restart();
                     clock.restart();
-                } else if (is_all_buttons && is_click_button(pos_rect_run_stop, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // run/stop button
+                } else if (is_click_button(pos_rect_run_stop, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // run/stop button
                     is_stop = !is_stop;
                 } else if (is_all_buttons && is_click_button(pos_rect_change_sps, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // run/stop button
                     int new_sps = getNumber("enter", "enter sps: ", window);
@@ -1130,9 +1287,9 @@ int main() {
                     clock_simulate.restart();
                     clock.restart();
                 } else if (is_stop && !is_all_buttons) {
-#else
-                if (is_stop) {
-#endif
+//#else
+//                    if (is_stop) {
+//#endif
                     int id = get_id_ceil(click_pos);
                     if (id!=-1) {
 #ifndef CPU_MODE
@@ -1147,7 +1304,18 @@ int main() {
                 }
             }
 #ifndef ANDROID_MODE
-            else if (event.type==sf::Event::MouseWheelScrolled && event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+                else if (event.type == sf::Event::MouseMoved) {
+                if (sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
+                    if (lastMousePos.x!=-1) {
+                        sf::Vector2f newMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
+                        sf::Vector2f direction = newMousePos-lastMousePos;
+                        sf::Vector2f direction_ceils = sf::Vector2f(direction.x/calc_size_px(), direction.y/calc_size_px());
+                        camx -= direction_ceils.x;
+                        camy += direction_ceils.y;
+                    }
+                }
+                lastMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
+            } else if (event.type==sf::Event::MouseWheelScrolled && event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
                 const sf::Vector2f mouse_pos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
 #else
             else if (event.type == SDL_EVENT_FINGER_MOTION && !is_all_buttons) {
@@ -1170,25 +1338,36 @@ int main() {
                     SDL_free(fingers);
 #endif
                     sf::Vector2f last_pos = get_pos_ceil(mouse_pos);
-                    #ifndef ANDROID_MODE
+#ifndef ANDROID_MODE
                     scale *= std::pow(1.2, event.mouseWheelScroll.delta);
-                    #else
+#else
                     scale *= std::pow(1.2, dDist / std::min(width, height) * 10.0);
-                    #endif
+#endif
                     sf::Vector2f new_pos = get_pos_ceil(mouse_pos);
                     camx -= new_pos.x - last_pos.x;
                     camy -= new_pos.y - last_pos.y;
-                #ifdef ANDROID_MODE
+#ifdef ANDROID_MODE
                 } else {
                     lastDist = 0;
+                    if (count==1) {
+                        std::optional<int> res = slider_sps.event_to(count, fingers);
+                        if (res) {
+                            sps = *res;
+                        } else {
+                            sf::Vector2f direction = sf::Vector2f(event.tfinger.dx*width, event.tfinger.dy*height);
+                            sf::Vector2f direction_ceils = sf::Vector2f(direction.x/calc_size_px(), direction.y/calc_size_px());
+                            camx -= direction_ceils.x;
+                            camy += direction_ceils.y;
+                        }
+                    }
                     SDL_free(fingers);
                 }
-                #endif
+#endif
             }
 #ifndef ANDROID_MODE
             else if (event.type == sf::Event::KeyPressed) {
                 if (event.key.code == sf::Keyboard::R) {
-                    for (int i = 0; i!=size*size; i++) {
+                    for (uint64_t i = 0; i!=size*size; i++) {
 #ifdef CPU_MODE
                         READ_CEILS[i] = dis(gen)<=37;
 #endif
@@ -1204,7 +1383,7 @@ int main() {
                     clock.restart();
                 } else if (event.key.code == sf::Keyboard::E) {
                     if (event.key.alt) {
-                        for (int i = 0; i!=size*size; i++) {
+                        for (uint64_t i = 0; i!=size*size; i++) {
 #ifdef CPU_MODE
                             READ_CEILS[i] = false;
 #endif
@@ -1245,7 +1424,7 @@ int main() {
                             ceils.resize((new_size*new_size+31)/32);
 #endif
 
-                            for (int i = 0; i!=size*size; i++) {
+                            for (uint64_t i = 0; i!=size*size; i++) {
 #ifdef CPU_MODE
                                 READ_CEILS[i] = dis(gen)<=37;
 #endif
@@ -1275,38 +1454,42 @@ int main() {
             }
             if (!is_stop && calc) {
 #ifndef CPU_MODE
-                gpuRun2(shader, size*size, SSBO_IN, SSBO_OUT, "sizexy", size, "total", size*size);
+                gpuRun22d(shader, size, size, SSBO_IN, SSBO_OUT, "sizexy", size);
 #endif
 #ifdef CPU_MODE
-                #pragma omp parallel for
-                for (uint32_t id = 0; id!=ceils.size(); id++) {
-                    uint32_t x = id % size;
-                    uint32_t y = id / size;
-                    uint32_t neighbors = 0;
-                    if (x > 0 && READ_CEILS[y*size + (x-1)] == 1) neighbors++; // лево
-                    if (x+1 < size && READ_CEILS[y*size + (x+1)] == 1) neighbors++; // право
+#pragma omp parallel for
+                for (uint32_t y = 0; y!=size; y++) {
+                    for (uint32_t x = 0; x!=size; x++) {
+                        //uint32_t x = id % size;
+                        //uint32_t y = id / size;
+                        uint64_t id = x+y*size;
+                        uint32_t neighbors = 0;
+                        if (x > 0 && READ_CEILS[y*size + (x-1)] == 1) neighbors++; // лево
+                        if (x+1 < size && READ_CEILS[y*size + (x+1)] == 1) neighbors++; // право
 
-                    if (y+1 < size) {
-                        if (READ_CEILS[(y+1)*size + x] == 1) neighbors++; // низ
-                        if (x > 0 && READ_CEILS[(y+1)*size + (x-1)] == 1) neighbors++; // низ-лево
-                        if (x+1 < size && READ_CEILS[(y+1)*size + (x+1)] == 1) neighbors++; // низ-право
-                    }
+                        if (y+1 < size) {
+                            if (READ_CEILS[(y+1)*size + x] == 1) neighbors++; // низ
+                            if (x > 0 && READ_CEILS[(y+1)*size + (x-1)] == 1) neighbors++; // низ-лево
+                            if (x+1 < size && READ_CEILS[(y+1)*size + (x+1)] == 1) neighbors++; // низ-право
+                        }
 
-                    if (y > 0) {
-                        if (READ_CEILS[(y-1)*size + x] == 1) neighbors++; // верх
-                        if (x > 0 && READ_CEILS[(y-1)*size + (x-1)] == 1) neighbors++; // верх-лево
-                        if (x+1 < size && READ_CEILS[(y-1)*size + (x+1)] == 1) neighbors++; // верх-право
+                        if (y > 0) {
+                            if (READ_CEILS[(y-1)*size + x] == 1) neighbors++; // верх
+                            if (x > 0 && READ_CEILS[(y-1)*size + (x-1)] == 1) neighbors++; // верх-лево
+                            if (x+1 < size && READ_CEILS[(y-1)*size + (x+1)] == 1) neighbors++; // верх-право
+                        }
+                        bool current = READ_CEILS[id];
+                        bool result = false;
+                        if (current == 1) {
+                            if (neighbors == 2 || neighbors == 3) result = true; // Выжил
+                        } else {
+                            if (neighbors == 3) result = true; // Родился
+                        }
+                        WRITE_CEILS[id] = result;
                     }
-                    bool current = READ_CEILS[id];
-                    bool result = false;
-                    if (current == 1) {
-                        if (neighbors == 2 || neighbors == 3) result = true; // Выжил
-                    } else {
-                        if (neighbors == 3) result = true; // Родился
-                    }
-                    WRITE_CEILS[id] = result;
                 }
 #endif
+                active = !active;
             }
         }
 #ifndef ANDROID_MODE
@@ -1317,7 +1500,7 @@ int main() {
 #endif
 #ifndef CPU_MODE
         if (!is_stop && calc) {
-            downloadSSBOData(SSBO_OUT, ceils);
+            downloadSSBOData(SSBO_IN, ceils);
         }
 #endif
         int sizepx = calc_size_px();
@@ -1326,9 +1509,6 @@ int main() {
         // rect.setSize(sf::Vector2f(sizepx, sizepx));
         // rect.setOutlineThickness(-sizepx*0.05);
         // rect.setOutlineColor(sf::Color(100, 100, 100));
-        if (!is_stop && calc) {
-            active = !active;
-        }
         std::pair<sf::Vector2i, sf::Vector2i> view = get_view();
         rects.reserve(size*size);
         uint32_t sizey = (view.second.x-view.first.x+1);
@@ -1374,7 +1554,7 @@ int main() {
 #endif
         vex.resize(rects.size()*4);
 #pragma omp parallel for
-        for (uint32_t i = 0; i!=rects.size(); i++) {
+        for (uint64_t i = 0; i!=rects.size(); i++) {
             const auto& rect = rects[i];
             sf::Color col = (rect.second? sf::Color::Black: sf::Color::White);
             vex[i*4].position = rect.first+sf::Vector2f(sizepx*0.05, sizepx*0.05);
@@ -1393,16 +1573,20 @@ int main() {
 #else
         vex.render();
 #endif
-#ifdef ANDROID_MODE
+//#ifdef ANDROID_MODE
         float buttonsWidth = safeArea.w*0.5;
         float buttonsHeight = safeArea.h*0.1;
-        float buttonsRound = std::min(safeArea.w, safeArea.h)*0.05;
+        float buttonsRound = std::min(safeArea.w, safeArea.h)*0.02;
         if (is_all_buttons) {
             sf::RectangleShape all;
             all.setPosition(sf::Vector2f(0, 0));
             all.setSize(sf::Vector2f(width, height));
             all.setFillColor(sf::Color(0, 0, 0, 100));
+#ifdef ANDROID_MODE
             all.render();
+#else
+            window.draw(all);
+#endif
             // buttons (resize, clear, stop/run)
             sf::Vector2f pos_rect = sf::Vector2f(safeArea.x + safeArea.w * 0.25,safeArea.h * 0.1 + safeArea.y);
             // button resize
@@ -1412,8 +1596,14 @@ int main() {
                 rect.setFillColor(sf::Color(200, 220, 20));
                 auto text = createTextForButton("resize", pos_rect, buttonsWidth, buttonsHeight,
                                                 buttonsRound);
+                text.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
                 rect.render();
                 text.render();
+#else
+                window.draw(rect);
+                window.draw(text);
+#endif
             }
             // button clear
             {
@@ -1422,22 +1612,14 @@ int main() {
                 rect.setPosition(pos_rect);
                 rect.setFillColor(sf::Color(150, 150, 150));
                 auto text = createTextForButton("clear", pos_rect, buttonsWidth, buttonsHeight, buttonsRound);
+                text.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
                 rect.render();
                 text.render();
-            }
-            // button stop/run
-            {
-                auto rect = createRoundedRect(buttonsWidth, buttonsHeight, buttonsRound);
-                pos_rect += sf::Vector2f(0, safeArea.h * 0.12);
-                rect.setPosition(pos_rect);
-                if (!is_stop) {
-                    rect.setFillColor(sf::Color(220, 10, 10));
-                } else {
-                    rect.setFillColor(sf::Color(10, 220, 10));
-                }
-                auto text = createTextForButton((is_stop ?"run": "stop"), pos_rect, buttonsWidth, buttonsHeight, buttonsRound);
-                rect.render();
-                text.render();
+#else
+                window.draw(rect);
+                window.draw(text);
+#endif
             }
             // button change SPS
             {
@@ -1446,8 +1628,14 @@ int main() {
                 rect.setPosition(pos_rect);
                 rect.setFillColor(sf::Color(10, 220, 10));
                 auto text = createTextForButton("change SPS", pos_rect, buttonsWidth, buttonsHeight, buttonsRound);
+                text.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
                 rect.render();
                 text.render();
+#else
+                window.draw(rect);
+                window.draw(text);
+#endif
             }
         }
         auto rect = createRoundedRect(buttonsWidth, buttonsHeight, buttonsRound);
@@ -1455,23 +1643,92 @@ int main() {
         rect.setPosition(pos_rect);
         rect.setFillColor(sf::Color(220, 10, 10));
         auto text = createTextForButton("random", pos_rect, buttonsWidth, buttonsHeight, buttonsRound);
+        text.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
         rect.render();
         text.render();
+#else
+        window.draw(rect);
+        window.draw(text);
+#endif
         auto rect2 = createRoundedRect(buttonsWidth, buttonsHeight, buttonsRound);
         sf::Vector2f pos_rect2 = sf::Vector2f(safeArea.x+safeArea.w*0.5, safeArea.h*0.9+safeArea.y);
         rect2.setPosition(pos_rect2);
-        if (!is_all_buttons) {
-            rect2.setFillColor(sf::Color(200, 200, 200));
+        if (!is_stop) {
+            rect2.setFillColor(sf::Color(220, 10, 10));
         } else {
-            rect2.setFillColor(sf::Color(200*0.8, 200*0.8, 200*0.8));
+            rect2.setFillColor(sf::Color(10, 220, 10));
         }
-        auto text2 = createTextForButton("all", pos_rect2, buttonsWidth, buttonsHeight, buttonsRound);
+        auto text2 = createTextForButton((is_stop ?"run": "stop"), pos_rect2, buttonsWidth, buttonsHeight, buttonsRound);
+        text2.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
         rect2.render();
         text2.render();
+#else
+        window.draw(rect2);
+        window.draw(text2);
+#endif
 
+        // render all button
+        {
+            float size_button = std::min(safeArea.w, safeArea.h)*0.1;
+            float padding_line = size_button/2.0*0.3;
+            float size_line = (size_button-padding_line*2)/3;
+            padding_line += size_line;
+#ifdef ANDROID_MODE
+            sf::Vector2f start_pos_button = sf::Vector2f(safeArea.w-size_button*1.1+safeArea.x, size_button*0.1+safeArea.y+safeArea.h*0.05);
+#else
+            sf::Vector2f start_pos_button = sf::Vector2f(safeArea.w-size_button*1.1+safeArea.x, size_button*0.1+safeArea.y);
+#endif
+            auto line1 = createRoundedRect(size_button, size_line, size_line*0.5);
+            line1.setPosition(start_pos_button+sf::Vector2f(0, padding_line*0));
+            auto line2 = createRoundedRect(size_button, size_line, size_line*0.5);
+            line2.setPosition(start_pos_button+sf::Vector2f(0, padding_line*1));
+            auto line3 = createRoundedRect(size_button, size_line, size_line*0.5);
+            line3.setPosition(start_pos_button+sf::Vector2f(0, padding_line*2));
+
+            const sf::Color color_lines = sf::Color(100, 100, 100);
+            line1.setFillColor(color_lines);
+            line2.setFillColor(color_lines);
+            line3.setFillColor(color_lines);
+
+#ifdef ANDROID_MODE
+            line1.render();
+            line2.render();
+            line3.render();
+#else
+            window.draw(line1);
+            window.draw(line2);
+            window.draw(line3);
+#endif
+        }
+#ifdef ANDROID_MODE
+        sf::Vector2f pos_slider = sf::Vector2f(safeArea.h*0.02+safeArea.x, safeArea.h*0.02+safeArea.y+safeArea.h*0.05);
+#else
+        sf::Vector2f pos_slider = sf::Vector2f(safeArea.h*0.02+safeArea.x, safeArea.h*0.02+safeArea.y);
+#endif
+        slider_sps.setPosition(pos_slider);
+        slider_sps.setSize(sf::Vector2f(safeArea.w*0.2, safeArea.h*0.02));
+#ifdef ANDROID_MODE
+        slider_sps.render(sps);
+#else
+        slider_sps.render(window, sps);
+#endif
+        sf::Text text_sps;
+        text_sps.setPosition(pos_slider+sf::Vector2f(safeArea.w*0.22, 0));
+        text_sps.setCharacterSize(safeArea.h*0.02);
+        text_sps.setString(std::to_string(sps)+" SPS");
+        text_sps.setFillColor(sf::Color(46, 204, 113));
+        text_sps.setFont(defaultFont);
+#ifdef ANDROID_MODE
+        text_sps.render();
+#else
+        window.draw(text_sps);
+#endif
+#ifdef ANDROID_MODE
         // render title
         float dt = clock.restart().asSeconds();
-        std::string title = "FPS="+(is_stop? "stop": std::to_string((int)(1/dt)))+", SPS="+(is_stop? "stop": std::to_string(std::min((int)(1/dt), sps)))+", rects="+std::to_string(size_rects);
+        std::string title = "FPS="+std::to_string((int)(1/dt))+", rects="+std::to_string(size_rects) + "("+std::to_string(view.second.x-view.first.x+1)+"x"+std::to_string(view.second.y-view.first.y+1)+")";
         sf::RectangleShape title_rect;
         title_rect.setPosition(sf::Vector2f(0,0));
         title_rect.setSize(sf::Vector2f(width, safeArea.h*0.05+safeArea.y));
@@ -1488,7 +1745,7 @@ int main() {
         float dt = clock.restart().asSeconds();
 #endif
 #ifndef ANDROID_MODE
-        std::string title = "Game of Live (FPS="+(is_stop? "stop": std::to_string((int)(1/dt)))+", SPS="+(is_stop? "stop": std::to_string(std::min((int)(1/dt), sps)))+", rects="+std::to_string(size_rects)+")";
+        std::string title = "Game of Live (FPS="+std::to_string((int)(1/dt))+", SPS="+std::to_string(sps)+", rects="+std::to_string(size_rects) + "("+std::to_string(view.second.x-view.first.x+1)+"x"+std::to_string(view.second.y-view.first.y+1)+"))";
         window.setTitle(title);
         window.display();
 #else
