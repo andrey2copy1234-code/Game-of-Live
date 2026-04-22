@@ -434,3 +434,26 @@ void gpuRun2(unsigned int prog, unsigned int count, GLuint ssboIn, GLuint ssboOu
     glBindBufferBase(0x90D2, 1, 0);
 }
 #endif
+template<typename... Args>
+void gpuRun22d(unsigned int prog, unsigned int countx, unsigned int county, GLuint ssboIn, GLuint ssboOut, Args... uniforms) {
+    if (prog == 0) return;
+
+    glUseProgram(prog);
+
+    // Привязываем ВХОДНОЙ буфер к binding = 0
+    glBindBufferBase(0x90D2, 0, ssboIn);
+    // Привязываем ВЫХОДНОЙ буфер к binding = 1
+    glBindBufferBase(0x90D2, 1, ssboOut);
+
+    _set_unif(prog, uniforms...);
+
+    glDispatchCompute((countx + 15) / 16, (county + 15) / 16, 1);
+
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT); // GL_SHADER_STORAGE_BARRIER_BIT
+    checkGL("gpuRun (Double SSBO Dispatch)");
+
+    // Очистка состояний
+    glUseProgram(0);
+    glBindBufferBase(0x90D2, 0, 0);
+    glBindBufferBase(0x90D2, 1, 0);
+}
