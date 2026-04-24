@@ -1,9 +1,10 @@
 // game of live on gpu and cpu
 // cd C:/Users/Azerty/Desktop/Программы/filescpp; g++ game_of_live.cpp -o game_of_live.exe -I"c:/Users/Azerty/Downloads/SFML-2.6.1/include" -L"c:/Users/Azerty/Downloads/SFML-2.6.1/lib" -lsfml-graphics-d -lsfml-window-d -lsfml-system-d -lopengl32 -lwinmm -lgdi32 -lcomdlg32 -lws2_32 -fconcepts-diagnostics-depth=2 -Wfatal-errors
 //#define CPU_MODE
+#include <limits>
+#include <optional>
 #ifndef ANDROID_MODE
 #include <SFML/Graphics.hpp>
-#include <optional>
 #else
 #include <GLES3/gl32.h>
 #include <GLES3/gl3ext.h>
@@ -13,8 +14,8 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-#include <android/asset_manager.h>
-#include <android/asset_manager_jni.h>
+//#include <android/asset_manager.h>
+//#include <android/asset_manager_jni.h>
 #endif
 #include <random>
 // #include <iostream>
@@ -31,30 +32,30 @@ int height = 600;
 #ifdef ANDROID_MODE
 const char* vertex_shader_code = "#version 310 es\n"
                                  "layout(location = 0) in vec2 pos;\n"
-                                 "layout(location = 1) in vec4 color;\n"
+                                 "layout(location = 1) in lowp vec4 color;\n"
                                  "layout(location = 2) in vec2 texCoord;\n" // Принимаем UV
-                                 "out vec4 vColor;\n"
+                                 "out lowp vec4 vColor;\n"
                                  "out vec2 vTexCoord;\n"
                                  "uniform vec2 u_res;\n"
                                  "void main() {\n"
-                                 "    gl_Position = vec4((pos.x / u_res.x * 2.0) - 1.0, (pos.y / u_res.y * -2.0) + 1.0, 0.0, 1.0);\n"
+                                 "    gl_Position = vec4((pos.x * u_res.x * 2.0) - 1.0, (pos.y * u_res.y * -2.0) + 1.0, 0.0, 1.0);\n"
                                  "    vColor = color;\n"
                                  "    vTexCoord = texCoord;\n"
                                  "}\n";
 
 const char* fragment_shader_code = "#version 310 es\n"
-                                   "precision highp float;\n"
-                                   "in vec4 vColor;\n"
+                                   "precision mediump float;\n"
+                                   "in lowp vec4 vColor;\n"
                                    "in vec2 vTexCoord;\n"
-                                   "out vec4 fragColor;\n"
+                                   "out lowp vec4 fragColor;\n"
                                    "uniform sampler2D u_texture;\n" // Текстура атласа
-                                   "uniform int u_useTexture;\n"   // Флаг: 1 - текст, 0 - клетки
+                                   "uniform uint u_useTexture;\n"   // Флаг: 1 - текст, 0 - клетки
                                    "void main() {\n"
-                                   "    if (u_useTexture == 1) {\n"
-                                   "        fragColor = texture(u_texture, vTexCoord) * vColor;\n"
-                                   "    } else {\n"
+                                   "    if (u_useTexture == 0u) {\n"
                                    "        fragColor = vColor;\n"
+                                   "        return;"
                                    "    }\n"
+                                   "    fragColor = texture(u_texture, vTexCoord) * vColor;\n"
                                    "}\n";
 GLuint graphicsProgramID = 0;
 
@@ -99,7 +100,7 @@ void startAndroidSFML() {
     glDeleteShader(fragmentShader);
     glUseProgram(graphicsProgramID);
     GLint resLoc = glGetUniformLocation(graphicsProgramID, "u_res");
-    glUniform2f(resLoc, (float)width, (float)height);
+    glUniform2f(resLoc, 1/(float)width, 1/(float)height);
 }
 GLuint loadTextureSDL3(const char* filename) {
     // 1. Открываем файл из assets (SDL3 сам знает, где они лежат в Android)
@@ -143,7 +144,7 @@ namespace sf {
         void use() {
             glUseProgram(graphicsProgramID);
             GLint useTexLoc = glGetUniformLocation(graphicsProgramID, "u_useTexture");
-            glUniform1i(useTexLoc, 1);
+            glUniform1ui(useTexLoc, 1);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, id);
             GLint texLoc = glGetUniformLocation(graphicsProgramID, "u_texture");
@@ -152,7 +153,7 @@ namespace sf {
         void unuse() {
             glUseProgram(graphicsProgramID);
             GLint useTexLoc = glGetUniformLocation(graphicsProgramID, "u_useTexture");
-            glUniform1i(useTexLoc, 0);
+            glUniform1ui(useTexLoc, 0);
         }
     };
     enum PrimitiveType {
@@ -488,7 +489,7 @@ namespace sf {
             if (!m_font || m_font->getTextureID() == 0) return;
             glUseProgram(graphicsProgramID);
             GLint useTexLoc = glGetUniformLocation(graphicsProgramID, "u_useTexture");
-            glUniform1i(useTexLoc, 1);
+            glUniform1ui(useTexLoc, 1);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_font->getTextureID());
             GLint texLoc = glGetUniformLocation(graphicsProgramID, "u_texture");
@@ -497,7 +498,7 @@ namespace sf {
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             m_vertices.render();
             glDisable(GL_BLEND);
-            glUniform1i(useTexLoc, 0);
+            glUniform1ui(useTexLoc, 0);
         }
     };
     class ConvexShape {
@@ -589,19 +590,31 @@ inline sf::Vector2f calc_pos(int x, int y, double gbs) {
     float py = (height / 2.0 - (y - camy) * gbs);
     return sf::Vector2f(px, py);
 }
+long long safeDoubleToLongLong(double value) {
+    constexpr double max_val = static_cast<double>(std::numeric_limits<long long>::max());
+    constexpr double min_val = static_cast<double>(std::numeric_limits<long long>::min());
 
+    if (value > max_val) [[unlikely]] {
+        return std::numeric_limits<long long>::max();
+    }
+    if (value < min_val) [[unlikely]] {
+        return std::numeric_limits<long long>::min();
+    }
+
+    return static_cast<long long>(value);
+}
 inline float calc_size_px() {
-    return (int)(get_base_scale() * scale);
+    return get_base_scale() * scale;
 }
 inline int calc_size_ssbo() {
     return (size*size + 31) / 32*4;
 }
-inline int get_id_ceil(const sf::Vector2f pos) {
+inline unsigned long long get_id_ceil(const sf::Vector2f pos) {
     double s = get_base_scale() * scale;
-    int x = std::floor((pos.x - width/2) / s + camx);
-    int y = std::floor((height/2-pos.y) / s + camy)+1;
+    long long x = safeDoubleToLongLong(std::floor((pos.x - width/2) / s + camx));
+    long long y = safeDoubleToLongLong(std::floor((height/2-pos.y) / s + camy))+1;
     if (x < 0 || y < 0 || x >= size || y >= size) {
-        return -1;
+        return std::numeric_limits<unsigned long long>::max();
     }
     return y * size + x;
 }
@@ -615,18 +628,18 @@ inline std::pair<sf::Vector2i, sf::Vector2i> get_view() {
     double s = get_base_scale() * scale;
     double radius_x = (width / 2.0) / s;
     double radius_y = (height / 2.0) / s;
-    int x_start = (int)std::floor(camx - radius_x);
-    int x_end   = (int)std::ceil(camx + radius_x);
-    int y_start = (int)std::floor(camy - radius_y);
-    int y_end   = (int)std::ceil(camy + radius_y);
-    x_start = std::max(0, x_start);
-    x_start = std::min((int)size, x_start);
-    y_start = std::max(0, y_start);
-    y_start = std::min((int)size, y_start);
-    x_end   = std::min((int)size - 1, x_end);
-    x_end   = std::max(-1, x_end);
-    y_end   = std::min((int)size - 1, y_end);
-    y_end   = std::max(-1, y_end);
+    long long x_start = safeDoubleToLongLong(std::floor(camx - radius_x));
+    long long x_end   = safeDoubleToLongLong(std::ceil(camx + radius_x));
+    long long y_start = safeDoubleToLongLong(std::floor(camy - radius_y));
+    long long y_end   = safeDoubleToLongLong(std::ceil(camy + radius_y));
+    x_start = std::max((long long)0, x_start);
+    x_start = std::min((long long)size, x_start);
+    y_start = std::max((long long)0, y_start);
+    y_start = std::min((long long)size, y_start);
+    x_end   = std::min((long long)size - 1, x_end);
+    x_end   = std::max((long long)-1, x_end);
+    y_end   = std::min((long long)size - 1, y_end);
+    y_end   = std::max((long long)-1, y_end);
     return {sf::Vector2i(x_start, y_start), sf::Vector2i(x_end, y_end)};
 }
 #ifndef CPU_MODE
@@ -1168,7 +1181,7 @@ int main(int argc, char* argv[]) {
                 glUseProgram(graphicsProgramID); // ID твоей скомпилированной программы
                 GLint loc = glGetUniformLocation(graphicsProgramID, "u_res");
                 if (loc != -1) {
-                    glUniform2f(loc, (float)width, (float)height);
+                    glUniform2f(loc, 1/(float)width, 1/(float)height);
                 }
                 SDL_Log("width: %d", width);
                 SDL_Log("height: %d", height);
@@ -1290,8 +1303,8 @@ int main(int argc, char* argv[]) {
 //#else
 //                    if (is_stop) {
 //#endif
-                    int id = get_id_ceil(click_pos);
-                    if (id!=-1) {
+                    unsigned long long id = get_id_ceil(click_pos);
+                    if (id!=std::numeric_limits<unsigned long long>::max()) {
 #ifndef CPU_MODE
                         // ceils[id] = !ceils[id];
                         set_index(ceils, id, get_index(ceils, id)==0);
@@ -1310,8 +1323,10 @@ int main(int argc, char* argv[]) {
                         sf::Vector2f newMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
                         sf::Vector2f direction = newMousePos-lastMousePos;
                         sf::Vector2f direction_ceils = sf::Vector2f(direction.x/calc_size_px(), direction.y/calc_size_px());
-                        camx -= direction_ceils.x;
-                        camy += direction_ceils.y;
+                        if (!std::isnan(direction_ceils.x) && !std::isinf(direction_ceils.x) && !std::isnan(direction_ceils.y) && !std::isinf(direction_ceils.y)) {
+                            camx -= direction_ceils.x;
+                            camy += direction_ceils.y;
+                        }
                     }
                 }
                 lastMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
