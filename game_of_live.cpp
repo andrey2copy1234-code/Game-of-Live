@@ -1,8 +1,10 @@
 // game of live on gpu and cpu
-// cd C:/Users/Azerty/Desktop/Программы/filescpp; g++ game_of_live.cpp -o game_of_live.exe -I"c:/Users/Azerty/Downloads/SFML-2.6.1/include" -L"c:/Users/Azerty/Downloads/SFML-2.6.1/lib" -lsfml-graphics-d -lsfml-window-d -lsfml-system-d -lopengl32 -lwinmm -lgdi32 -lcomdlg32 -lws2_32 -fconcepts-diagnostics-depth=2 -Wfatal-errors
+// cd C:/Users/Azerty/Desktop/Программы/filescpp; g++ game_of_live.cpp -o game_of_live.exe -I"c:/Users/Azerty/Downloads/SFML-2.6.1/include" -L"c:/Users/Azerty/Downloads/SFML-2.6.1/lib" -lsfml-graphics-d -lsfml-window-d -lsfml-system-d -lopengl32 -lwinmm -lgdi32 -lcomdlg32 -lws2_32 -fconcepts-diagnostics-depth=2 -Wfatal-errors -O3 -std=c++20 -fopenmp
 //#define CPU_MODE
 #include <limits>
 #include <optional>
+#include <filesystem>
+#include "libs/serialize.cpp"
 #ifndef ANDROID_MODE
 #include <SFML/Graphics.hpp>
 #else
@@ -27,6 +29,15 @@
 #endif
 #endif
 #include <mutex>
+
+void print(const std::string& str) {
+#ifndef ANDROID_MODE
+    std::cout << str << std::endl;
+#else
+    SDL_Log("%s", str.c_str());
+#endif
+}
+
 int width = 800;
 int height = 600;
 #ifdef ANDROID_MODE
@@ -137,9 +148,15 @@ namespace sf {
         ~Texture() {
             if (id != 0) glDeleteTextures(1, &id);
         }
-        bool load(std::string filename) {
+        Texture(const Texture&) = delete;
+        Texture& operator=(const Texture&) = delete;
+
+        bool loadFromFile(std::string filename) {
             id = loadTextureSDL3(filename.c_str());
             return id!=0;
+        }
+        bool load(std::string filename) {
+            return loadFromFile(std::move(filename));
         }
         void use() {
             glUseProgram(graphicsProgramID);
@@ -620,8 +637,11 @@ inline unsigned long long get_id_ceil(const sf::Vector2f pos) {
 }
 inline sf::Vector2f get_pos_ceil(const sf::Vector2f pos) {
     double s = get_base_scale() * scale;
-    float x = ((pos.x-width / 2)/s - camx);
-    float y = ((height/2-pos.y)/s - camy);
+
+    // Повторяем логику вычисления x и y из get_id_ceil
+    float x = (pos.x - width / 2) / s + camx;
+    float y = (height / 2 - pos.y) / s + camy + 1;
+
     return sf::Vector2f(x, y);
 }
 inline std::pair<sf::Vector2i, sf::Vector2i> get_view() {
@@ -814,6 +834,147 @@ int getNumber(const std::string& title, const std::string& content, SDL_Window* 
     }
 }
 #endif
+#ifndef ANDROID_MODE
+std::string getString(const std::string& title, const std::string& content, sf::RenderWindow& mainWindow) {
+    sf::VideoMode vidioMode(300, 200);
+    sf::RenderWindow input_window(vidioMode, title);
+    input_window.setFramerateLimit(30);
+
+    sf::Text contentText;
+    contentText.setString(content);
+    contentText.setCharacterSize(std::min(20, (int)(600/content.length())));
+    contentText.setFont(defaultFont);
+    contentText.setPosition(sf::Vector2f(10.f, 10.f));
+    contentText.setFillColor(sf::Color::Black);
+    sf::Text inputText;
+    inputText.setString("Input: ");
+    inputText.setCharacterSize(20);
+    inputText.setPosition(sf::Vector2f(5, 40));
+    inputText.setFont(defaultFont);
+    inputText.setFillColor(sf::Color::Black);
+    std::string input_string = "";
+    sf::Event event;
+    while (input_window.isOpen() && mainWindow.isOpen()) {
+        while (input_window.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) {
+                input_string = "";
+                input_window.close();
+            }
+            else if (event.type == sf::Event::KeyPressed) {
+                if (event.key.code == sf::Keyboard::Enter) {
+                    input_window.close();
+                } else if (event.key.code == sf::Keyboard::BackSpace) {
+                    if (!input_string.empty()) {
+                        input_string.pop_back();
+                    }
+                }
+            }
+            else if (event.type == sf::Event::TextEntered) {
+                uint32_t code = event.text.unicode;
+                if (code >= 32 && code<256) {
+                    input_string += (char)code;
+                }
+            }
+
+            inputText.setString("Input: " + input_string);
+        }
+        while (mainWindow.pollEvent(event)) {
+            if (event.type == sf::Event::Closed) {
+                input_window.close();
+                mainWindow.close();
+            }
+        }
+        input_window.clear(sf::Color::White);
+        input_window.draw(contentText);
+        input_window.draw(inputText);
+        input_window.display();
+        //mainWindow.display();
+    }
+    mainWindow.setActive(true);
+    return input_string;
+}
+#else
+std::string getString(const std::string& title, const std::string& content, SDL_Window* mainWindow) {
+    // 1. ЗАХВАТ КАДРА (Front Buffer -> Texture)
+    int size = std::min((int)(height/3), (int)(std::max(20, (int)(width/content.length()))*1.5));
+    GLuint staticTex;
+    glGenTextures(1, &staticTex);
+    glBindTexture(GL_TEXTURE_2D, staticTex);
+
+    // Используем твои глобальные width и height
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, width, height, 0);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    std::string input_string = "";
+    bool entering = true;
+    SDL_Event event;
+
+    SDL_StartTextInput(mainWindow);
+
+    while (entering) {
+        uint32_t frameStart = SDL_GetTicks();
+
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                glDeleteTextures(1, &staticTex);
+                return "";
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                if (event.key.key == SDLK_RETURN) entering = false;
+                if (event.key.key == SDLK_BACKSPACE && !input_string.empty()) {
+                    input_string.pop_back();
+                }
+            }
+            if (event.type == SDL_EVENT_TEXT_INPUT) {
+                char c = event.text.text[0]; // Берем первый символ из пришедшей строки
+                input_string += c;
+            }
+        }
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(graphicsProgramID);
+        glBindTexture(GL_TEXTURE_2D, staticTex);
+        glUniform1i(glGetUniformLocation(graphicsProgramID, "u_useTexture"), 1);
+
+        // 2. Рисуем один Quad (Triangle Fan) на весь экран вручную
+        float verts[] = {
+                -1.0f,  1.0f,  0.0f, 0.0f, // x, y, u, v
+                1.0f,  1.0f,  1.0f, 0.0f,
+                1.0f, -1.0f,  1.0f, 1.0f,
+                -1.0f, -1.0f,  0.0f, 1.0f
+        };
+
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), verts);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), &verts[2]);
+        glEnableVertexAttribArray(2);
+
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        sf::Text text;
+        text.setFont(defaultFont);
+        text.setString(content);
+        text.setCharacterSize(size); // Или любой твой размер
+        text.setPosition(sf::Vector2f(20, 20));
+        text.render();
+        std::string fullInputLine = "Input: " + input_string;
+        sf::Text text2;
+        text2.setFont(defaultFont);
+        text2.setString(fullInputLine);
+        text2.setCharacterSize(size); // Или любой твой размер
+        text2.setPosition(sf::Vector2f(20, 40+size));
+        text2.render();
+        SDL_GL_SwapWindow(mainWindow);
+        uint32_t frameTime = SDL_GetTicks() - frameStart;
+        if (frameTime < 33) {
+            SDL_Delay(33 - frameTime);
+        }
+    }
+    SDL_StopTextInput(mainWindow);
+    glDeleteTextures(1, &staticTex);
+    return input_string;
+}
+#endif
 #ifndef CPU_MODE
 #ifdef ANDROID_MODE
 const char* shader_code = R"(#version 310 es
@@ -899,6 +1060,7 @@ void main() {
 }
 )"
 ;
+#endif
 inline bool get_index(std::vector<uint32_t>& ceils, uint32_t index) {
     return (ceils[index/32]>>(index%32)) & 1;
 }
@@ -911,7 +1073,6 @@ inline void set_index(std::vector<uint32_t>& ceils, uint32_t index, bool val) {
         ceils[array_idx] &= ~(1u << bit_pos);
     }
 }
-#endif
 #ifdef ANDROID_MODE
 SDL_Rect safeArea;
 #else
@@ -1041,6 +1202,521 @@ public:
     }
 #endif
 };
+// часть сохранений:
+void write_in_file(const std::string& filename, const std::vector<uint8_t>& data) {
+#ifdef ANDROID_MODE
+    // --- ВЕТКА ДЛЯ ANDROID (SDL3) ---
+    // Получаем безопасный путь для записи данных приложения
+    char* pref_path = SDL_GetPrefPath("example", "gameoflive");
+    if (!pref_path) return;
+
+    std::string full_path = std::string(pref_path) + filename;
+    SDL_free(pref_path);
+
+    SDL_IOStream* io = SDL_IOFromFile(full_path.c_str(), "wb");
+    if (io) {
+        SDL_WriteIO(io, data.data(), data.size());
+        SDL_CloseIO(io);
+        SDL_Log("Android: Saved %zu bytes to %s", data.size(), full_path.c_str());
+    }
+#else
+    // --- ВЕТКА ДЛЯ PC (Windows/Linux) ---
+    std::ofstream file(filename, std::ios::binary);
+    if (file.is_open()) {
+        file.write(reinterpret_cast<const char*>(data.data()), data.size());
+        std::cout << "PC: Saved " << data.size() << " bytes to " << filename << std::endl;
+    }
+#endif
+}
+std::vector<uint8_t> read_from_file(const std::string& filename) {
+#ifdef ANDROID_MODE
+    // --- ВЕТКА ДЛЯ ANDROID (SDL3) ---
+    char* pref_path = SDL_GetPrefPath("example", "gameoflive");
+    if (!pref_path) return {};
+
+    std::string full_path = std::string(pref_path) + filename;
+    SDL_free(pref_path);
+
+    SDL_IOStream* io = SDL_IOFromFile(full_path.c_str(), "rb");
+    if (!io) return {};
+
+    Sint64 size = SDL_GetIOSize(io);
+    if (size <= 0) {
+        SDL_CloseIO(io);
+        return {};
+    }
+
+    std::vector<uint8_t> buffer(static_cast<size_t>(size));
+    SDL_ReadIO(io, buffer.data(), buffer.size());
+    SDL_CloseIO(io);
+    return buffer;
+#else
+    // --- ВЕТКА ДЛЯ PC (Windows/Linux) ---
+    std::ifstream file(filename, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) return {};
+
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> buffer(size);
+    if (file.read(reinterpret_cast<char*>(buffer.data()), size)) {
+        return buffer;
+    }
+    return {};
+#endif
+}
+bool delete_file(const std::string& filename) {
+#ifdef ANDROID_MODE
+    // --- ВЕТКА ДЛЯ ANDROID (SDL3) ---
+    char* pref_path = SDL_GetPrefPath("example", "gameoflive");
+    if (!pref_path) return false;
+
+    std::string full_path = std::string(pref_path) + filename;
+    SDL_free(pref_path);
+
+    if (SDL_RemovePath(full_path.c_str()) == 0) {
+        return true;
+    }
+    return false;
+#else
+    // --- ВЕТКА ДЛЯ PC (Windows/Linux) ---
+    if (std::remove(filename.c_str()) == 0) {
+        return true;
+    }
+    return false;
+#endif
+}
+namespace fs = std::filesystem;
+std::string get_base_dir() {
+#ifdef ANDROID_MODE
+    char* pref_path = SDL_GetPrefPath("example", "gameoflive");
+    if (pref_path) {
+        std::string path = pref_path;
+        SDL_free(pref_path);
+        return path;
+    }
+    return "";
+#else
+    return "./"; // Текущая директория для PC
+#endif
+}
+std::vector<std::string> get_all_files() {
+    std::vector<std::string> file_list;
+    std::string path = get_base_dir();
+
+    try {
+        if (path.empty() || !fs::exists(path)) {
+            return file_list;
+        }
+
+        // Перебираем элементы в директории
+        for (const auto& entry : fs::directory_iterator(path)) {
+            // Добавляем в список только обычные файлы (не папки)
+            if (entry.is_regular_file()) {
+                file_list.push_back(entry.path().filename().string());
+            }
+        }
+    } catch (const fs::filesystem_error& e) {
+#ifdef ANDROID_MODE
+        SDL_Log("FS Error: %s", e.what());
+#else
+        std::cerr << "FS Error: " << e.what() << std::endl;
+#endif
+    }
+
+    return file_list;
+}
+struct save_struct {
+    uint32_t sizex;
+    uint32_t sizey;
+    std::vector<uint32_t> data;
+    void load_from_part(std::vector<bool>& ceils, uint32_t x, uint32_t y, int sx, int sy) {
+        data.resize((abs((long long)sx*(long long)sy)+31)/32);
+        if (sx<0) {
+            x-=-sx;
+            sx = abs(sx);
+        }
+        if (sy<0) {
+            y-=-sy;
+            sy = abs(sy);
+        }
+        sizex = sx;
+        sizey = sy;
+        std::cout << "sx:" << sx << "sy:" << sy << std::endl;
+        std::cout << "x:" << x << "y:" << y << std::endl;
+        std::cout << "sizex:" << sizex << "sizey:" << sizey << std::endl;
+        for (uint32_t iy = y; iy!=y+sy; iy++) {
+            for (uint32_t ix = x; ix!=x+sx; ix++) {
+                uint64_t id = iy*size+ix;
+                uint64_t id_in = (iy-y)*sx+ix-x;
+                set_index(data, id_in, ceils[id]);
+            }
+        }
+    }
+    void load_from_part(std::vector<uint32_t>& ceils, uint32_t x, uint32_t y, int sx, int sy) {
+        data.resize((abs(sx*sy)+31)/32);
+        if (sx<0) {
+            x-=-sx;
+            sx = abs(sx);
+        }
+        if (sy<0) {
+            y-=-sy;
+            sy = abs(sy);
+        }
+        sizex = sx;
+        sizey = sy;
+        std::cout << "sx:" << sx << "sy:" << sy << std::endl;
+        std::cout << "x:" << x << "y:" << y << std::endl;
+        std::cout << "sizex:" << sizex << "sizey:" << sizey << std::endl;
+        for (uint32_t iy = y; iy!=y+sy; iy++) {
+            for (uint32_t ix = x; ix!=x+sx; ix++) {
+                uint64_t id = iy*size+ix;
+                uint64_t id_in = (iy-y)*sx+ix-x;
+                set_index(data, id_in, get_index(ceils, id));
+            }
+        }
+    }
+    void import_in_part(std::vector<bool>& ceils, uint32_t x, uint32_t y) {
+        for (uint32_t ix = x; ix!=x+sizex; ix++) {
+            for (uint32_t iy = y; iy!=y+sizey; iy++) {
+                uint32_t id = iy*size+ix;
+                uint64_t id_in = (iy-y)*sizex+ix-x;
+                ceils[id] = get_index(data, id_in);
+            }
+        }
+    }
+    void import_in_part(std::vector<uint32_t>& ceils, uint32_t x, uint32_t y) {
+        for (uint32_t ix = x; ix!=x+sizex; ix++) {
+            for (uint32_t iy = y; iy!=y+sizey; iy++) {
+                uint32_t id = iy*size+ix;
+                uint64_t id_in = (iy-y)*sizex+ix-x;
+                set_index(ceils, id, get_index(data, id_in));
+            }
+        }
+    }
+    void load_from_name(std::string name) {
+        std::vector<uint8_t> buff = read_from_file(name);
+        Ser::load_from_buffer(*this, buff);
+    }
+    void save(std::string name) {
+        std::vector<uint8_t> buff = Ser::to_buffer(*this);
+        write_in_file(name, buff);
+    }
+#ifndef ANDROID_MODE
+    void draw(sf::RenderWindow& window, float x, float y, float sx, float sy) {
+#else
+    void draw(SDL_Window* window, float x, float y, float sx, float sy) {
+#endif
+        sf::RectangleShape all;
+        all.setFillColor(sf::Color(50, 50, 50));
+        all.setSize(sf::Vector2f(sx, sy));
+        all.setPosition(sf::Vector2f(x, y));
+#ifdef ANDROID_MODE
+        all.render();
+#else
+        window.draw(all);
+#endif
+        float scale_ceil = std::min(sx/sizex, sy/sizey);
+        float paddx = abs(sx-scale_ceil*sizex)/2;
+        float paddy = abs(sy-scale_ceil*sizey)/2;
+        x += paddx;
+        y += paddy;
+        sf::RectangleShape rect;
+        rect.setFillColor(sf::Color(100, 100, 100));
+        rect.setPosition(sf::Vector2f(x, y));
+        rect.setSize(sf::Vector2f(scale_ceil*sizex, scale_ceil*sizey));
+#ifdef ANDROID_MODE
+        rect.render();
+#else
+        window.draw(rect);
+#endif
+        sf::VertexArray vex(sf::Quads);
+        vex.resize(sizex*sizey*4);
+        float padd_start = scale_ceil*0.05;
+        float padd_end = scale_ceil*0.95;
+#pragma omp parallel for
+        for (uint32_t iy = 0; iy!=sizey; iy++) {
+            for (uint32_t ix = 0; ix!=sizex; ix++) {
+                uint64_t id = (sizey-iy-1)*sizex+ix;
+                bool ceil = get_index(data, id);
+                sf::Color col = (ceil? sf::Color::Black: sf::Color::White);
+                uint64_t id_vex = id*4;
+                vex[id_vex].position.x = x+ix*scale_ceil+padd_start;
+                vex[id_vex].position.y = y+iy*scale_ceil+padd_start;
+                vex[id_vex].color = col;
+                id_vex++;
+                vex[id_vex].position.x = x+ix*scale_ceil+padd_end;
+                vex[id_vex].position.y = y+iy*scale_ceil+padd_start;
+                vex[id_vex].color = col;
+                id_vex++;
+                vex[id_vex].position.x = x+ix*scale_ceil+padd_end;
+                vex[id_vex].position.y = y+iy*scale_ceil+padd_end;
+                vex[id_vex].color = col;
+                id_vex++;
+                vex[id_vex].position.x = x+ix*scale_ceil+padd_start;
+                vex[id_vex].position.y = y+iy*scale_ceil+padd_end;
+                vex[id_vex].color = col;
+            }
+        }
+#ifdef ANDROID_MODE
+        vex.render();
+#else
+        window.draw(vex);
+#endif
+    }
+};
+std::string format_save_name(std::string name) {
+    // 1. Убираем расширение .gol (последние 4 символа)
+    if (name.size() > 4 && name.substr(name.size() - 4) == ".gol") {
+        name.erase(name.size() - 4);
+    }
+
+    // 2. Заменяем все '_' на ' '
+    std::replace(name.begin(), name.end(), '_', ' ');
+
+    return name;
+}
+std::string format_no_save_name(std::string name) {
+    std::replace(name.begin(), name.end(), ' ', '_');
+    return name+".gol";
+}
+sf::Texture delete_icon;
+#ifdef ANDROID_MODE
+std::optional<save_struct> show_saves(SDL_Window* window) {
+#else
+    std::optional<save_struct> show_saves(sf::RenderWindow& window) {
+#endif
+    std::vector<std::pair<std::string, save_struct>> saves;
+    std::vector<std::string> files = get_all_files();
+    for (const auto& name: files) {
+        if (name.ends_with(".gol")) {
+            save_struct save_file;
+            save_file.load_from_name(name);
+            saves.emplace_back(format_save_name(name), std::move(save_file));
+        }
+    }
+    float scroll = 0;
+#ifdef ANDROID_MODE
+    bool runing = true;
+    while (runing) {
+#else
+        while (window.isOpen()) {
+#endif
+        float sizex = std::min(width, height)*0.9;
+        float sizey = sizex*1.1;
+        float paddx = (width-sizex)/2;
+        float paddy = paddx;
+        float step = (paddy + paddx * 0.5f + sizey);
+        float total_content_height = step * saves.size() + paddx * 0.5f+height*0.1;
+        float scroll_max = std::max(0.0f, total_content_height - height);
+
+        sf::Vector2f pos_button_exit = sf::Vector2f(width*0.1, height*0.9);
+        sf::Vector2f size_button_exit = sf::Vector2f(width*0.8, height*0.1);
+        float round_button_exit = std::min(width, height)*0.02;
+
+#ifndef ANDROID_MODE
+        sf::Event event;
+        while (window.pollEvent(event)) {
+#else
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+#endif
+#ifndef ANDROID_MODE
+            if (event.type == sf::Event::Closed)
+                window.close();
+#else
+            if (event.type == SDL_EVENT_QUIT) runing = false;
+#endif
+#ifdef ANDROID_MODE
+            else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+                float scroll_percent = (scroll_max > 0) ? (scroll / -scroll_max) : 0.0f;
+                width = event.window.data1;
+                height = event.window.data2;
+                glViewport(0, 0, width, height);
+                SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &safeArea);
+                glUseProgram(graphicsProgramID); // ID твоей скомпилированной программы
+                GLint loc = glGetUniformLocation(graphicsProgramID, "u_res");
+                if (loc != -1) {
+                    glUniform2f(loc, 1/(float)width, 1/(float)height);
+                }
+                SDL_Log("width: %d", width);
+                SDL_Log("height: %d", height);
+                SDL_Log("safeArea.x: %d", safeArea.x);
+                SDL_Log("safeArea.y: %d", safeArea.y);
+                SDL_Log("safeArea.w: %d", safeArea.w);
+                SDL_Log("safeArea.h: %d", safeArea.h);
+                if (safeArea.w>width) {
+                    safeArea.w = width-safeArea.x;
+                }
+                if (safeArea.h>height) {
+                    safeArea.h = height-safeArea.y;
+                }
+
+                float step = paddy + paddx * 0.5f + sizey;
+                float total_height = step * saves.size() + paddy;
+                scroll_max = std::max(0.0f, total_height - (float)height);
+                scroll = -scroll_percent * scroll_max;
+                scroll = std::max(-scroll_max, std::min(0.0f, scroll));
+            }
+#else
+                else if (event.type==sf::Event::Resized) {
+                float scroll_percent = (scroll_max > 0) ? (scroll / -scroll_max) : 0.0f;
+                sf::FloatRect visibleArea(0.f, 0.f, event.size.width, event.size.height);
+                width = event.size.width;
+                height = event.size.height;
+                safeArea.w = width;
+                safeArea.h = height;
+                window.setView(sf::View(visibleArea));
+
+                float step = paddy + paddx * 0.5f + sizey;
+                float total_height = step * saves.size() + paddy;
+                scroll_max = std::max(0.0f, total_height - (float)height);
+                scroll = -scroll_percent * scroll_max;
+                scroll = std::max(-scroll_max, std::min(0.0f, scroll));
+            }
+#endif
+#ifndef ANDROID_MODE
+                else if (event.type==sf::Event::MouseWheelScrolled && event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+                scroll+=event.mouseWheelScroll.delta*50;
+                scroll = std::max(-scroll_max, std::min(0.0f, scroll));
+            }
+#else
+            else if (event.type == SDL_EVENT_FINGER_MOTION) {
+                //SDL_Log("move");
+                int count = 0;
+                SDL_Finger** fingers = SDL_GetTouchFingers(event.tfinger.touchID, &count);
+                if (count==1) {
+                    scroll+=event.tfinger.dx*width;
+                    scroll = std::max(-scroll_max, std::min(0.0f, scroll));
+                }
+            }
+#endif
+#ifndef ANDROID_MODE
+                else if (event.type==sf::Event::MouseButtonPressed) {
+                const sf::Vector2f click_pos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
+#else
+            else if (event.type == SDL_EVENT_FINGER_DOWN) {
+                const sf::Vector2f click_pos = sf::Vector2f(event.tfinger.x * width, event.tfinger.y * height);
+#endif
+                if (is_click_button(pos_button_exit, size_button_exit, click_pos)) {
+                    return std::nullopt;
+                }
+                uint32_t i = 0;
+                for (auto& [name, save]: saves) {
+                    float x = paddx;
+                    float y = (paddy+x*0.5+sizey)*i+scroll+x*0.5;
+                    float delete_button_size = sizex*0.08;
+                    sf::Vector2f delete_button_bg_pos = sf::Vector2f(x+sizex*0.98-delete_button_size, y+sizex*1.01);
+                    if (is_click_button(delete_button_bg_pos, sf::Vector2f(delete_button_size, delete_button_size), click_pos)) { // delete button
+                        delete_file(format_no_save_name(name));
+                        saves.erase(saves.begin() + i);
+                        break;
+                    }
+                    if (is_click_button(sf::Vector2f(x, y), sf::Vector2f(sizex, sizey), click_pos)) {
+                        return save;
+                    }
+                    i++;
+                }
+            }
+        }
+#ifdef ANDROID_MODE
+        clearWindow(sf::Color(50, 50, 50));
+#else
+        window.clear(sf::Color(50, 50, 50));
+#endif
+        uint32_t i = 0;
+        sf::RectangleShape rect_out;
+        rect_out.setSize(sf::Vector2f(sizex+paddx, sizey+paddx));
+        rect_out.setFillColor(sf::Color::Black);
+        sf::RectangleShape rect_in;
+        rect_in.setSize(sf::Vector2f(sizex+paddx*0.5, sizey+paddx*0.5));
+        rect_in.setFillColor(sf::Color(200, 200, 200));
+        sf::Text text;
+        text.setFont(defaultFont);
+        text.setFillColor(sf::Color(20, 20, 20));
+        text.setCharacterSize(sizex*0.08);
+        for (auto& [name, save]: saves) {
+            float x = paddx;
+            float y = (paddy+x*0.5+sizey)*i+scroll+x*0.5;
+            rect_out.setPosition(sf::Vector2f(x*0.5, y-x*0.5));
+            rect_in.setPosition(sf::Vector2f(x*0.75, y-x*0.25));
+#ifdef ANDROID_MODE
+            rect_out.render();
+            rect_in.render();
+#else
+            window.draw(rect_out);
+            window.draw(rect_in);
+#endif
+            save.draw(window, x, y, sizex, sizex);
+            text.setPosition(sf::Vector2f(x+sizex*0.02, y+sizex*1.01));
+            text.setString(name);
+#ifdef ANDROID_MODE
+            text.render();
+#else
+            window.draw(text);
+#endif
+            float delete_button_size = sizex*0.08;
+#ifndef ANDROID_MODE
+            sf::CircleShape delete_button_bg(delete_button_size*0.5f);
+#else
+            sf::CircleShape delete_button_bg;
+            delete_button_bg.setSize(sf::Vector2f(delete_button_size, delete_button_size));
+#endif
+            sf::Vector2f delete_button_bg_pos = sf::Vector2f(x+sizex*0.98f-delete_button_size, y+sizex*1.01f);
+            delete_button_bg.setPosition(delete_button_bg_pos);
+            delete_button_bg.setFillColor(sf::Color(180, 50, 50));
+            sf::RectangleShape delete_icon_img;
+#ifndef ANDROID_MODE
+            delete_icon_img.setTexture(&delete_icon);
+#endif
+            float delete_icon_img_size = delete_button_size/std::sqrt(2);
+            delete_icon_img.setSize(sf::Vector2f(delete_icon_img_size, delete_icon_img_size));
+            float add_pos_img = (delete_button_size-delete_icon_img_size)*0.5f;
+            delete_icon_img.setPosition(delete_button_bg_pos+sf::Vector2f(add_pos_img, add_pos_img));
+            delete_icon_img.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
+            delete_icon_img.setTexture();
+            delete_button_bg.render();
+            delete_icon.use();
+            delete_icon_img.setTransparency();
+            delete_icon_img.render();
+            delete_icon_img.setUnTransparency();
+            delete_icon.unuse();
+#else
+            window.draw(delete_button_bg);
+            window.draw(delete_icon_img);
+#endif
+            i++;
+        }
+        // button exit
+        auto button_exit = createRoundedRect(size_button_exit.x, size_button_exit.y, round_button_exit);
+        button_exit.setPosition(pos_button_exit);
+        button_exit.setFillColor(sf::Color(180, 50, 50));
+        auto button_text_exit = createTextForButton("exit", pos_button_exit, size_button_exit.x, size_button_exit.y, round_button_exit);
+        button_text_exit.setFillColor(sf::Color(50, 10, 10));
+#ifdef ANDROID_MODE
+        button_exit.render();
+        button_text_exit.render();
+#else
+        window.draw(button_exit);
+        window.draw(button_text_exit);
+#endif
+#ifdef ANDROID_MODE
+        SDL_GL_SwapWindow(window);
+        SDL_Delay(16);
+#else
+        window.display();
+#endif
+    }
+#ifdef ANDROID_MODE
+    SDL_Event quit_event;
+    quit_event.type = SDL_EVENT_QUIT;
+    SDL_PushEvent(&quit_event);
+#else
+    window.close();
+#endif
+    return std::nullopt;
+}
 int sps = 5;
 #ifndef ANDROID_MODE
 int main() {
@@ -1051,6 +1727,13 @@ int main(int argc, char* argv[]) {
     defaultFont.loadFromFile("C:/Windows/Fonts/arial.ttf");
 #endif
     bool is_all_buttons = false;
+    uint8_t is_select = 0; //0 - не выделяется. 1 - ожидание выделения. 2 - ожидание конца выделения. 3 - выделено
+    uint32_t select_x = 0;
+    uint32_t select_y = 0;
+    int select_sx = 0;
+    int select_sy = 0;
+    bool is_paste = false;
+    std::optional<save_struct> paste_struct = std::nullopt;
 #ifndef ANDROID_MODE
     sf::RenderWindow window(sf::VideoMode(800, 600), "Game Of Live (FPS=30)");
     window.setFramerateLimit(30);
@@ -1111,6 +1794,21 @@ int main(int argc, char* argv[]) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, 100);
+    sf::Texture save_icon;
+    if (!save_icon.loadFromFile("save.png")) {
+        print("error load \"save.png\"");
+    }
+    sf::Texture select_icon;
+    if (!select_icon.loadFromFile("select.png")) {
+        print("error load \"select.png\"");
+    }
+    sf::Texture build_icon;
+    if (!build_icon.loadFromFile("build_icon.png")) {
+        print("error load \"build_icon.png\"");
+    }
+    if (!delete_icon.loadFromFile("delete_icon.png")) {
+        print("error load \"delete_icon.png\"");
+    }
 #ifdef CPU_MODE
 #ifdef ANDROID_MODE
     loadGPUFunctions();
@@ -1209,11 +1907,18 @@ int main(int argc, char* argv[]) {
             }
 #endif
 #ifndef ANDROID_MODE
-                else if (event.type==sf::Event::MouseButtonPressed) {
+                else if (event.type==sf::Event::MouseButtonReleased) {
+                if (is_select==2) {
+                    is_select = 3;
+                }
+            } else if (event.type==sf::Event::MouseButtonPressed) {
                 const sf::Vector2f click_pos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
 #else
             else if (event.type == SDL_EVENT_FINGER_UP) {
                 lastDist = 0;
+                if (is_select==2) {
+                    is_select = 3;
+                }
             } else if (event.type == SDL_EVENT_FINGER_DOWN) {
                 const sf::Vector2f click_pos = sf::Vector2f(event.tfinger.x * width, event.tfinger.y * height);
 #endif
@@ -1228,9 +1933,12 @@ int main(int argc, char* argv[]) {
 #else
                 sf::Vector2f pos_rect_all = sf::Vector2f(safeArea.w-size_button_all*1.1+safeArea.x, size_button_all*0.1+safeArea.y);
 #endif
+                sf::Vector2f pos_select_button = pos_rect_all-sf::Vector2f(size_button_all*1.1, 0);
+                sf::Vector2f pos_save_button = pos_select_button-sf::Vector2f(size_button_all*1.1, 0);
                 sf::Vector2f pos_rect_resize = sf::Vector2f(safeArea.x + safeArea.w * 0.25,safeArea.h * 0.1 + safeArea.y);
                 sf::Vector2f pos_rect_clear = pos_rect_resize+sf::Vector2f(0, safeArea.h*0.12);
                 sf::Vector2f pos_rect_change_sps = pos_rect_clear+sf::Vector2f(0, safeArea.h*0.12);
+                sf::Vector2f pos_rect_saves = pos_rect_change_sps+sf::Vector2f(0, safeArea.h*0.12);
                 if (is_click_button(pos_rect_random, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // random button
                     for (int i = 0; i!=size*size; i++) {
 #ifdef CPU_MODE
@@ -1248,6 +1956,50 @@ int main(int argc, char* argv[]) {
                     clock.restart();
                 } else if (is_click_button(pos_rect_all, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // all button
                     is_all_buttons = !is_all_buttons;
+                    is_stop = true;
+                } else if (is_select==3 && is_click_button(pos_save_button, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // save button
+                    std::string name = getString("input", "input name save", window);
+                    if (!name.empty()) {
+                        save_struct save_dat;
+#ifdef CPU_MODE
+                        save_dat.load_from_part(READ_CEILS, select_x, select_y, select_sx, select_sy);
+#else
+                        save_dat.load_from_part(ceils, select_x, select_y, select_sx, select_sy);
+#endif
+                        save_dat.save(format_no_save_name(name));
+                    }
+                } else if (!is_paste && is_click_button(pos_select_button, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // select button
+                    if (is_select==0) {
+                        is_select = 1;
+                    } else {
+                        is_select = 0;
+                    }
+                } else if (is_paste && is_click_button(pos_select_button, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // select button
+                    save_struct& sp = *paste_struct;
+                    int x_paste = camx-sp.sizex/2;
+                    int y_paste = camy-sp.sizey/2;
+                    for (uint32_t y = std::min((int)sp.sizey, std::max(0, -(int)y_paste)); y!=std::max(std::min((int)sp.sizey, (int)size - y_paste), 0); y++) {
+                        for (uint32_t x = std::min((int)sp.sizex, std::max(0, -(int)x_paste)); x!=std::max(std::min((int)sp.sizex, (int)size - x_paste), 0); x++) {
+                            uint64_t id_in = y*sp.sizex+x;
+                            uint64_t id_out = (y+y_paste)*size+x+x_paste;
+#ifdef CPU_MODE
+                            READ_CEILS[id_out] = get_index(sp.data, id_in);
+#else
+                            set_index(ceils, id_out, get_index(sp.data, id_in));
+#endif
+                        }
+                    }
+#ifndef CPU_MODE
+                    updateSSBOData(SSBO_IN, ceils);
+#endif
+                    is_paste = false;
+                    paste_struct = std::nullopt;
+                } else if (is_all_buttons && is_click_button(pos_rect_saves, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // saves button
+                    paste_struct = show_saves(window);
+                    if (paste_struct) {
+                        is_paste = true;
+                        is_select = false;
+                    }
                 } else if (is_all_buttons && is_click_button(pos_rect_resize, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // resize button
                     int new_size = getNumber("enter", "enter size: ", window);
                     if (new_size>1) {
@@ -1299,6 +2051,18 @@ int main(int argc, char* argv[]) {
                     }
                     clock_simulate.restart();
                     clock.restart();
+                } else if (!is_all_buttons && is_select==1) {
+                    sf::Vector2f pos_ceilf = get_pos_ceil(click_pos);
+                    if (pos_ceilf.x>=0 && pos_ceilf.y>=0 && pos_ceilf.x<=size && pos_ceilf.y<=size) {
+                        sf::Vector2i pos_ceil = sf::Vector2i(pos_ceilf.x, pos_ceilf.y);
+                        is_select = 2;
+                        select_x = pos_ceil.x;
+                        select_y = pos_ceil.y;
+                        select_sx = 1;
+                        select_sy = 1;
+                    }
+                } else if (!is_all_buttons && is_select==3) {
+                    is_select = 0;
                 } else if (is_stop && !is_all_buttons) {
 //#else
 //                    if (is_stop) {
@@ -1318,9 +2082,36 @@ int main(int argc, char* argv[]) {
             }
 #ifndef ANDROID_MODE
                 else if (event.type == sf::Event::MouseMoved) {
-                if (sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
-                    if (lastMousePos.x!=-1) {
-                        sf::Vector2f newMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
+                if (!is_all_buttons && sf::Mouse::isButtonPressed(sf::Mouse::Left)) {
+                    sf::Vector2f newMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
+                    if (is_select==2) {
+                        sf::Vector2f pos_ceilf = get_pos_ceil(newMousePos);
+                        if (pos_ceilf.x>=0 && pos_ceilf.y>=0 && pos_ceilf.x<=size && pos_ceilf.y<=size) {
+                            sf::Vector2i size_ceils = sf::Vector2i(pos_ceilf.x, pos_ceilf.y)-sf::Vector2i(select_x, select_y);
+                            if ((size_ceils.y < 0) != (select_sy < 0)) {
+                                if (select_sy<0) {
+                                    select_y--;
+                                } else {
+                                    select_y++;
+                                }
+                            }
+                            if ((size_ceils.x < 0) != (select_sx < 0)) {
+                                if (select_sx<0) {
+                                    select_x--;
+                                } else {
+                                    select_x++;
+                                }
+                            }
+                            select_sx = size_ceils.x;
+                            select_sy = size_ceils.y;
+                            if (select_sx>=0) {
+                                select_sx++;
+                            }
+                            if (select_sy>=0) {
+                                select_sy++;
+                            }
+                        }
+                    } else if (is_select!=1 && lastMousePos.x!=-1) {
                         sf::Vector2f direction = newMousePos-lastMousePos;
                         sf::Vector2f direction_ceils = sf::Vector2f(direction.x/calc_size_px(), direction.y/calc_size_px());
                         if (!std::isnan(direction_ceils.x) && !std::isinf(direction_ceils.x) && !std::isnan(direction_ceils.y) && !std::isinf(direction_ceils.y)) {
@@ -1330,7 +2121,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 lastMousePos = sf::Vector2f(event.mouseMove.x, event.mouseMove.y);
-            } else if (event.type==sf::Event::MouseWheelScrolled && event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
+            } else if (!is_all_buttons && event.type==sf::Event::MouseWheelScrolled && event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel) {
                 const sf::Vector2f mouse_pos = window.mapPixelToCoords(sf::Mouse::getPosition(window));
 #else
             else if (event.type == SDL_EVENT_FINGER_MOTION && !is_all_buttons) {
@@ -1369,10 +2160,40 @@ int main(int argc, char* argv[]) {
                         if (res) {
                             sps = *res;
                         } else {
-                            sf::Vector2f direction = sf::Vector2f(event.tfinger.dx*width, event.tfinger.dy*height);
-                            sf::Vector2f direction_ceils = sf::Vector2f(direction.x/calc_size_px(), direction.y/calc_size_px());
-                            camx -= direction_ceils.x;
-                            camy += direction_ceils.y;
+                            sf::Vector2f newMousePos = sf::Vector2f(fingers[0]->x*width, fingers[0]->y*height);
+                            if (is_select==2) {
+                                sf::Vector2f pos_ceilf = get_pos_ceil(newMousePos);
+                                if (pos_ceilf.x>=0 && pos_ceilf.y>=0 && pos_ceilf.x<=size && pos_ceilf.y<=size) {
+                                    sf::Vector2i size_ceils = sf::Vector2i(pos_ceilf.x, pos_ceilf.y)-sf::Vector2i(select_x, select_y);
+                                    if ((size_ceils.y < 0) != (select_sy < 0)) {
+                                        if (select_sy<0) {
+                                            select_y--;
+                                        } else {
+                                            select_y++;
+                                        }
+                                    }
+                                    if ((size_ceils.x < 0) != (select_sx < 0)) {
+                                        if (select_sx<0) {
+                                            select_x--;
+                                        } else {
+                                            select_x++;
+                                        }
+                                    }
+                                    select_sx = size_ceils.x;
+                                    select_sy = size_ceils.y;
+                                    if (select_sx>=0) {
+                                        select_sx++;
+                                    }
+                                    if (select_sy>=0) {
+                                        select_sy++;
+                                    }
+                                }
+                            } else if (is_select!=1) {
+                                sf::Vector2f direction = sf::Vector2f(event.tfinger.dx*width, event.tfinger.dy*height);
+                                sf::Vector2f direction_ceils = sf::Vector2f(direction.x/calc_size_px(), direction.y/calc_size_px());
+                                camx -= direction_ceils.x;
+                                camy += direction_ceils.y;
+                            }
                         }
                     }
                     SDL_free(fingers);
@@ -1427,7 +2248,7 @@ int main(int argc, char* argv[]) {
                 } else if (event.key.code == sf::Keyboard::S) {
                     if (event.key.shift) {
                         is_stop = !is_stop;
-                    } else {
+                    } else if (!event.key.alt) {
                         int new_size = getNumber("enter", "enter size: ", window);
                         if (new_size>1) {
                             size = new_size;
@@ -1455,6 +2276,8 @@ int main(int argc, char* argv[]) {
                         }
                         clock_simulate.restart();
                         clock.restart();
+                    } else if (!is_paste) {
+                        is_select = 1;
                     }
                 }
             }
@@ -1518,7 +2341,7 @@ int main(int argc, char* argv[]) {
             downloadSSBOData(SSBO_IN, ceils);
         }
 #endif
-        int sizepx = calc_size_px();
+        float sizepx = calc_size_px();
         double gbs = get_base_scale()*scale;
         // sf::RectangleShape rect;
         // rect.setSize(sf::Vector2f(sizepx, sizepx));
@@ -1588,6 +2411,52 @@ int main(int argc, char* argv[]) {
 #else
         vex.render();
 #endif
+        if (is_paste) {
+            save_struct& sp = *paste_struct;
+            int x_paste = camx-sp.sizex/2;
+            int y_paste = camy-sp.sizey/2;
+            sf::VertexArray paste_vex(sf::Quads);
+            paste_vex.resize(sp.sizex*sp.sizey*4);
+            float padd_start = sizepx*0.05;
+            float padd_end = sizepx*0.95;
+            for (uint32_t y = std::min((int)sp.sizey, std::max(0, -(int)y_paste)); y!=std::max(std::min((int)sp.sizey, (int)size - y_paste), 0); y++) {
+                for (uint32_t x = std::min((int)sp.sizex, std::max(0, -(int)x_paste)); x!=std::max(std::min((int)sp.sizex, (int)size - x_paste), 0); x++) {
+                    uint64_t id = y*sp.sizex+x;
+                    uint64_t id_in = id*4;
+                    sf::Color col = (get_index(sp.data, id)? sf::Color::Black: sf::Color::White);
+                    col.a = 150;
+                    sf::Vector2f cp = calc_pos(x+x_paste, y+y_paste);
+
+                    paste_vex[id_in].position = cp+sf::Vector2f(padd_start, padd_start);
+                    paste_vex[id_in].color = col;
+                    id_in++;
+                    paste_vex[id_in].position = cp+sf::Vector2f(padd_start, padd_end);
+                    paste_vex[id_in].color = col;
+                    id_in++;
+                    paste_vex[id_in].position = cp+sf::Vector2f(padd_end, padd_end);
+                    paste_vex[id_in].color = col;
+                    id_in++;
+                    paste_vex[id_in].position = cp+sf::Vector2f(padd_end, padd_start);
+                    paste_vex[id_in].color = col;
+                }
+            }
+#ifdef ANDROID_MODE
+            paste_vex.render();
+#else
+            window.draw(paste_vex);
+#endif
+        }
+        if (is_select>1) {
+            sf::RectangleShape rect_select;
+            rect_select.setSize(sf::Vector2f(select_sx*sizepx, -select_sy*sizepx));
+            rect_select.setPosition(calc_pos(select_x, select_y-1));
+            rect_select.setFillColor(sf::Color(30, 60, 200, 100));
+#ifndef ANDROID_MODE
+            window.draw(rect_select);
+#else
+            rect_select.render();
+#endif
+        }
 //#ifdef ANDROID_MODE
         float buttonsWidth = safeArea.w*0.5;
         float buttonsHeight = safeArea.h*0.1;
@@ -1652,6 +2521,22 @@ int main(int argc, char* argv[]) {
                 window.draw(text);
 #endif
             }
+            // button saves
+            {
+                auto rect = createRoundedRect(buttonsWidth, buttonsHeight, buttonsRound);
+                pos_rect += sf::Vector2f(0, safeArea.h * 0.12);
+                rect.setPosition(pos_rect);
+                rect.setFillColor(sf::Color(50, 100, 180));
+                auto text = createTextForButton("saves", pos_rect, buttonsWidth, buttonsHeight, buttonsRound);
+                text.setFillColor(sf::Color::White);
+#ifdef ANDROID_MODE
+                rect.render();
+                text.render();
+#else
+                window.draw(rect);
+                window.draw(text);
+#endif
+            }
         }
         auto rect = createRoundedRect(buttonsWidth, buttonsHeight, buttonsRound);
         sf::Vector2f pos_rect = sf::Vector2f(safeArea.x, safeArea.h*0.9+safeArea.y);
@@ -1702,7 +2587,7 @@ int main(int argc, char* argv[]) {
             auto line3 = createRoundedRect(size_button, size_line, size_line*0.5);
             line3.setPosition(start_pos_button+sf::Vector2f(0, padding_line*2));
 
-            const sf::Color color_lines = sf::Color(100, 100, 100);
+            const sf::Color color_lines = sf::Color(110, 110, 110);
             line1.setFillColor(color_lines);
             line2.setFillColor(color_lines);
             line3.setFillColor(color_lines);
@@ -1716,6 +2601,53 @@ int main(int argc, char* argv[]) {
             window.draw(line2);
             window.draw(line3);
 #endif
+            // render select button
+            sf::Vector2f pos_select_button = start_pos_button-sf::Vector2f(size_button*1.1, 0);
+            sf::RectangleShape select_button;
+            select_button.setSize(sf::Vector2f(size_button, size_button));
+            select_button.setPosition(pos_select_button);
+#ifndef ANDROID_MODE
+            if (!is_paste) {
+                select_button.setTexture(&select_icon);
+            } else {
+                select_button.setTexture(&build_icon);
+            }
+            window.draw(select_button);
+#else
+            select_button.setTexture();
+            if (!is_paste) {
+                select_icon.use();
+            } else {
+                build_icon.use();
+            }
+            select_button.setTransparency();
+            select_button.render();
+            select_button.setUnTransparency();
+            if (!is_paste) {
+                select_icon.unuse();
+            } else {
+                build_icon.unuse();
+            }
+#endif
+            // render save button
+            if (is_select==3) {
+                sf::Vector2f pos_save_button = pos_select_button-sf::Vector2f(size_button*1.1, 0);
+                sf::RectangleShape save_button;
+                save_button.setSize(sf::Vector2f(size_button, size_button));
+                save_button.setPosition(pos_save_button);
+#ifndef ANDROID_MODE
+                save_button.setTexture(&save_icon);
+                window.draw(save_button);
+#else
+                save_button.setTexture();
+                save_icon.use();
+                save_button.setTexture();
+                save_button.setTransparency();
+                save_button.render();
+                save_button.setUnTransparency();
+                save_icon.unuse();
+#endif
+            }
         }
 #ifdef ANDROID_MODE
         sf::Vector2f pos_slider = sf::Vector2f(safeArea.h*0.02+safeArea.x, safeArea.h*0.02+safeArea.y+safeArea.h*0.05);
