@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 #include <filesystem>
+#include <omp.h>
 #include "libs/serialize.cpp"
 #ifndef ANDROID_MODE
 #include <SFML/Graphics.hpp>
@@ -47,9 +48,11 @@ const char* vertex_shader_code = "#version 310 es\n"
                                  "layout(location = 2) in vec2 texCoord;\n" // Принимаем UV
                                  "out lowp vec4 vColor;\n"
                                  "out vec2 vTexCoord;\n"
-                                 "uniform vec2 u_res;\n"
+                                 //"uniform vec2 u_res;\n"
+                                 "uniform mat4 u_projection;\n"
                                  "void main() {\n"
-                                 "    gl_Position = vec4((pos.x * u_res.x * 2.0) - 1.0, (pos.y * u_res.y * -2.0) + 1.0, 0.0, 1.0);\n"
+                                 //"    gl_Position = vec4((pos.x * u_res.x * 2.0) - 1.0, (pos.y * u_res.y * -2.0) + 1.0, 0.0, 1.0);\n"
+                                 "    gl_Position = u_projection*vec4(pos, 0.0, 1.0);\n"
                                  "    vColor = color;\n"
                                  "    vTexCoord = texCoord;\n"
                                  "}\n";
@@ -60,13 +63,10 @@ const char* fragment_shader_code = "#version 310 es\n"
                                    "in vec2 vTexCoord;\n"
                                    "out lowp vec4 fragColor;\n"
                                    "uniform sampler2D u_texture;\n" // Текстура атласа
-                                   "uniform uint u_useTexture;\n"   // Флаг: 1 - текст, 0 - клетки
+                                   "uniform float u_useTexture;\n"   // Флаг: 1 - текст, 0 - клетки
                                    "void main() {\n"
-                                   "    if (u_useTexture == 0u) {\n"
-                                   "        fragColor = vColor;\n"
-                                   "        return;"
-                                   "    }\n"
-                                   "    fragColor = texture(u_texture, vTexCoord) * vColor;\n"
+                                   "  vec4 texColor = texture(u_texture, vTexCoord) * vColor;\n"
+                                   "  fragColor = mix(vColor, texColor, u_useTexture);\n"
                                    "}\n";
 GLuint graphicsProgramID = 0;
 
@@ -110,8 +110,14 @@ void startAndroidSFML() {
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
     glUseProgram(graphicsProgramID);
-    GLint resLoc = glGetUniformLocation(graphicsProgramID, "u_res");
-    glUniform2f(resLoc, 1/(float)width, 1/(float)height);
+    GLint resLoc = glGetUniformLocation(graphicsProgramID, "u_projection");
+    float projection[16] = {
+        2.0f / (float)width,  0.0f,                  0.0f,  0.0f,
+        0.0f,                -2.0f / (float)height,  0.0f,  0.0f,
+        0.0f,                 0.0f,                 -1.0f,  0.0f,
+    -1.0f,                 1.0f,                  0.0f,  1.0f
+    };
+    glUniformMatrix4fv(resLoc, 1, GL_FALSE, projection); // загружаем mat4
 }
 GLuint loadTextureSDL3(const char* filename) {
     // 1. Открываем файл из assets (SDL3 сам знает, где они лежат в Android)
@@ -161,7 +167,7 @@ namespace sf {
         void use() {
             glUseProgram(graphicsProgramID);
             GLint useTexLoc = glGetUniformLocation(graphicsProgramID, "u_useTexture");
-            glUniform1ui(useTexLoc, 1);
+            glUniform1f(useTexLoc, 1);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, id);
             GLint texLoc = glGetUniformLocation(graphicsProgramID, "u_texture");
@@ -170,7 +176,7 @@ namespace sf {
         void unuse() {
             glUseProgram(graphicsProgramID);
             GLint useTexLoc = glGetUniformLocation(graphicsProgramID, "u_useTexture");
-            glUniform1ui(useTexLoc, 0);
+            glUniform1f(useTexLoc, 0);
         }
     };
     enum PrimitiveType {
@@ -358,57 +364,114 @@ namespace sf {
         ~Font() {
             if (m_textureID != 0) glDeleteTextures(1, &m_textureID);
         }
+        // bool loadFromFile(const std::string& filename) {
+        //     if (!TTF_Init()) return false;
+        //     TTF_Font* ttf = TTF_OpenFont(filename.c_str(), 48);
+        //     if (!ttf) return false;
+
+        //     SDL_Color white = {255, 255, 255, 255};
+        //     int glyphSize = 64; // Увеличим ячейку до степени двойки (так лучше для GPU)
+        //     int texSize = 1024; // 1024x1024 влезет всё с запасом
+
+        //     SDL_Surface* surf = SDL_CreateSurface(texSize, texSize, SDL_PIXELFORMAT_RGBA32);
+        //     if (!surf) { TTF_CloseFont(ttf); return false; }
+
+        //     // Заполняем полностью прозрачным цветом
+        //     SDL_FillSurfaceRect(surf, NULL, 0x00000000);
+
+        //     for (int i = 0; i < 95; ++i) {
+        //         char c = (char)(i + 32);
+        //         SDL_Surface* glyph = TTF_RenderGlyph_Blended(ttf, (Uint16)c, white);
+        //         if (glyph) {
+        //             int realW = 0;
+        //             // Проходим по столбцам справа налево
+        //             for (int x = glyph->w - 1; x >= 0; --x) {
+        //                 bool colHasPixels = false;
+        //                 for (int y = 0; y < glyph->h; ++y) {
+        //                     // Получаем адрес пикселя (RGBA32 = 4 байта на пиксель)
+        //                     Uint32* pixels = (Uint32*)glyph->pixels;
+        //                     Uint32 pixel = pixels[y * (glyph->pitch / 4) + x];
+
+        //                     // Извлекаем альфа-канал (в RGBA32 это обычно старшие или младшие 8 бит)
+        //                     Uint8 a = (Uint8)((pixel >> 24) & 0xFF); // Обычно в SDL_PIXELFORMAT_RGBA32 альфа в конце
+        //                     if (pixel == 0) a = 0; // На всякий случай, если пиксель пустой
+
+        //                     // Если используем Blended, смотрим на прозрачность больше порога
+        //                     if ((pixel & 0xFF000000) != 0) { // Простая проверка на наличие любого цвета/альфы
+        //                         colHasPixels = true;
+        //                         break;
+        //                     }
+        //                 }
+        //                 if (colHasPixels) {
+        //                     realW = x + 1;
+        //                     break;
+        //                 }
+        //             }
+
+        //             // Если буква — пробел, даем ей фиксированную ширину
+        //             if (c == ' ') realW = 30;
+        //             m_widths[i] = realW/48.0;
+
+        //             int row = i / 10;
+        //             int col = i % 10;
+        //             // Центрируем букву в ячейке, чтобы края не лезли на соседей
+        //             SDL_Rect dest = { col * glyphSize + 2, row * glyphSize + 2, glyph->w, glyph->h };
+        //             SDL_BlitSurface(glyph, NULL, surf, &dest);
+        //             SDL_DestroySurface(glyph);
+        //         }
+        //     }
+
+        //     m_glyphStep = (float)glyphSize / (float)texSize;
+
+        //     if (m_textureID != 0) glDeleteTextures(1, &m_textureID);
+        //     glGenTextures(1, &m_textureID);
+        //     glBindTexture(GL_TEXTURE_2D, m_textureID);
+        //     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texSize, texSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, surf->pixels);
+
+        //     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        //     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        //     SDL_DestroySurface(surf);
+        //     TTF_CloseFont(ttf);
+        //     return true;
+        // }
         bool loadFromFile(const std::string& filename) {
-            if (!TTF_Init()) return false;
+            // TTF_Init() должен вызываться ОДИН раз при старте приложения, а не здесь!
+            TTF_Init();
+            
             TTF_Font* ttf = TTF_OpenFont(filename.c_str(), 48);
             if (!ttf) return false;
 
             SDL_Color white = {255, 255, 255, 255};
-            int glyphSize = 64; // Увеличим ячейку до степени двойки (так лучше для GPU)
-            int texSize = 1024; // 1024x1024 влезет всё с запасом
+            int glyphSize = 64; 
+            int texSize = 1024; 
 
             SDL_Surface* surf = SDL_CreateSurface(texSize, texSize, SDL_PIXELFORMAT_RGBA32);
             if (!surf) { TTF_CloseFont(ttf); return false; }
 
-            // Заполняем полностью прозрачным цветом
-            SDL_FillSurfaceRect(surf, NULL, 0x00000000);
+            // Быстрая очистка поверхности
+            SDL_ClearSurface(surf, 0.0f, 0.0f, 0.0f, 0.0f);
 
             for (int i = 0; i < 95; ++i) {
-                char c = (char)(i + 32);
-                SDL_Surface* glyph = TTF_RenderGlyph_Blended(ttf, (Uint16)c, white);
+                // В SDL3 для символов используется Uint32 (Unicode-кодировка)
+                Uint32 c = (Uint32)(i + 32); 
+                
+                int minx, maxx, miny, maxy, advance;
+                // Функция возвращает true (или 0 в старых версиях SDL3) при успехе
+                if (TTF_GetGlyphMetrics(ttf, c, &minx, &maxx, &miny, &maxy, &advance)) {
+                    // advance — это расстояние, на которое сдвигается каретка после вывода символа
+                    m_widths[i] = (float)advance / 48.0f; 
+                } else {
+                    // Если шрифт не поддерживает символ, ставим ширину пробела по умолчанию
+                    m_widths[i] = (c == 32) ? (30.0f / 48.0f) : 0.0f;
+                }
+
+                // Рендерим глиф, также передавая Uint32
+                SDL_Surface* glyph = TTF_RenderGlyph_Blended(ttf, c, white);
                 if (glyph) {
-                    int realW = 0;
-                    // Проходим по столбцам справа налево
-                    for (int x = glyph->w - 1; x >= 0; --x) {
-                        bool colHasPixels = false;
-                        for (int y = 0; y < glyph->h; ++y) {
-                            // Получаем адрес пикселя (RGBA32 = 4 байта на пиксель)
-                            Uint32* pixels = (Uint32*)glyph->pixels;
-                            Uint32 pixel = pixels[y * (glyph->pitch / 4) + x];
-
-                            // Извлекаем альфа-канал (в RGBA32 это обычно старшие или младшие 8 бит)
-                            Uint8 a = (Uint8)((pixel >> 24) & 0xFF); // Обычно в SDL_PIXELFORMAT_RGBA32 альфа в конце
-                            if (pixel == 0) a = 0; // На всякий случай, если пиксель пустой
-
-                            // Если используем Blended, смотрим на прозрачность больше порога
-                            if ((pixel & 0xFF000000) != 0) { // Простая проверка на наличие любого цвета/альфы
-                                colHasPixels = true;
-                                break;
-                            }
-                        }
-                        if (colHasPixels) {
-                            realW = x + 1;
-                            break;
-                        }
-                    }
-
-                    // Если буква — пробел, даем ей фиксированную ширину
-                    if (c == ' ') realW = 30;
-                    m_widths[i] = realW/48.0;
-
                     int row = i / 10;
                     int col = i % 10;
-                    // Центрируем букву в ячейке, чтобы края не лезли на соседей
+                    
                     SDL_Rect dest = { col * glyphSize + 2, row * glyphSize + 2, glyph->w, glyph->h };
                     SDL_BlitSurface(glyph, NULL, surf, &dest);
                     SDL_DestroySurface(glyph);
@@ -420,6 +483,8 @@ namespace sf {
             if (m_textureID != 0) glDeleteTextures(1, &m_textureID);
             glGenTextures(1, &m_textureID);
             glBindTexture(GL_TEXTURE_2D, m_textureID);
+            
+            // Передаем текстуру в OpenGL
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texSize, texSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, surf->pixels);
 
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -506,7 +571,7 @@ namespace sf {
             if (!m_font || m_font->getTextureID() == 0) return;
             glUseProgram(graphicsProgramID);
             GLint useTexLoc = glGetUniformLocation(graphicsProgramID, "u_useTexture");
-            glUniform1ui(useTexLoc, 1);
+            glUniform1f(useTexLoc, 1);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_font->getTextureID());
             GLint texLoc = glGetUniformLocation(graphicsProgramID, "u_texture");
@@ -515,7 +580,7 @@ namespace sf {
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             m_vertices.render();
             glDisable(GL_BLEND);
-            glUniform1ui(useTexLoc, 0);
+            glUniform1f(useTexLoc, 0);
         }
     };
     class ConvexShape {
@@ -650,16 +715,16 @@ inline std::pair<sf::Vector2i, sf::Vector2i> get_view() {
     double radius_y = (height / 2.0) / s;
     long long x_start = safeDoubleToLongLong(std::floor(camx - radius_x));
     long long x_end   = safeDoubleToLongLong(std::ceil(camx + radius_x));
-    long long y_start = safeDoubleToLongLong(std::floor(camy - radius_y));
-    long long y_end   = safeDoubleToLongLong(std::ceil(camy + radius_y));
+    long long y_start = safeDoubleToLongLong(std::floor(camy - radius_y))+1;
+    long long y_end   = safeDoubleToLongLong(std::ceil(camy + radius_y))+1;
     x_start = std::max((long long)0, x_start);
     x_start = std::min((long long)size, x_start);
     y_start = std::max((long long)0, y_start);
     y_start = std::min((long long)size, y_start);
-    x_end   = std::min((long long)size - 1, x_end);
-    x_end   = std::max((long long)-1, x_end);
-    y_end   = std::min((long long)size - 1, y_end);
-    y_end   = std::max((long long)-1, y_end);
+    x_end   = std::min((long long)size, x_end);
+    x_end   = std::max((long long)0, x_end);
+    y_end   = std::min((long long)size, y_end);
+    y_end   = std::max((long long)0, y_end);
     return {sf::Vector2i(x_start, y_start), sf::Vector2i(x_end, y_end)};
 }
 #ifndef CPU_MODE
@@ -789,7 +854,7 @@ int getNumber(const std::string& title, const std::string& content, SDL_Window* 
         glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(graphicsProgramID);
         glBindTexture(GL_TEXTURE_2D, staticTex);
-        glUniform1i(glGetUniformLocation(graphicsProgramID, "u_useTexture"), 1);
+        glUniform1f(glGetUniformLocation(graphicsProgramID, "u_useTexture"), 1);
 
         // 2. Рисуем один Quad (Triangle Fan) на весь экран вручную
         float verts[] = {
@@ -935,7 +1000,7 @@ std::string getString(const std::string& title, const std::string& content, SDL_
         glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(graphicsProgramID);
         glBindTexture(GL_TEXTURE_2D, staticTex);
-        glUniform1i(glGetUniformLocation(graphicsProgramID, "u_useTexture"), 1);
+        glUniform1f(glGetUniformLocation(graphicsProgramID, "u_useTexture"), 1);
 
         // 2. Рисуем один Quad (Triangle Fan) на весь экран вручную
         float verts[] = {
@@ -1061,6 +1126,7 @@ void main() {
 )"
 ;
 #endif
+//
 inline bool get_index(std::vector<uint32_t>& ceils, uint32_t index) {
     return (ceils[index/32]>>(index%32)) & 1;
 }
@@ -1535,9 +1601,15 @@ std::optional<save_struct> show_saves(SDL_Window* window) {
                 glViewport(0, 0, width, height);
                 SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &safeArea);
                 glUseProgram(graphicsProgramID); // ID твоей скомпилированной программы
-                GLint loc = glGetUniformLocation(graphicsProgramID, "u_res");
+                GLint loc = glGetUniformLocation(graphicsProgramID, "u_projection");
                 if (loc != -1) {
-                    glUniform2f(loc, 1/(float)width, 1/(float)height);
+                    float projection[16] = {
+                        2.0f / (float)width,  0.0f,                  0.0f,  0.0f,
+                        0.0f,                -2.0f / (float)height,  0.0f,  0.0f,
+                        0.0f,                 0.0f,                 -1.0f,  0.0f,
+                    -1.0f,                 1.0f,                  0.0f,  1.0f
+                    };
+                    glUniformMatrix4fv(loc, 1, GL_FALSE, projection); // загружаем mat4
                 }
                 SDL_Log("width: %d", width);
                 SDL_Log("height: %d", height);
@@ -1717,7 +1789,8 @@ std::optional<save_struct> show_saves(SDL_Window* window) {
 #endif
     return std::nullopt;
 }
-int sps = 5;
+int max_sps = 5;
+int real_sps = 5;
 #ifndef ANDROID_MODE
 int main() {
 #else
@@ -1809,6 +1882,14 @@ int main(int argc, char* argv[]) {
     if (!delete_icon.loadFromFile("delete_icon.png")) {
         print("error load \"delete_icon.png\"");
     }
+    sf::Texture zercal_icon;
+    if (!zercal_icon.loadFromFile("zercal_icon.png")) {
+        print("error load \"zercal_icon.png\"");
+    }
+    sf::Texture rotate_icon;
+    if (!rotate_icon.loadFromFile("rotate_icon.png")) {
+        print("error load \"rotate_icon.png\"");
+    }
 #ifdef CPU_MODE
 #ifdef ANDROID_MODE
     loadGPUFunctions();
@@ -1857,7 +1938,8 @@ int main(int argc, char* argv[]) {
         while (window.pollEvent(event)) {
             std::optional<int> new_sps = slider_sps.event_to(event);
             if (new_sps) {
-                sps = *new_sps;
+                max_sps = *new_sps;
+                real_sps = max_sps;
                 continue;
             }
 #else
@@ -1877,9 +1959,15 @@ int main(int argc, char* argv[]) {
                 glViewport(0, 0, width, height);
                 SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window), &safeArea);
                 glUseProgram(graphicsProgramID); // ID твоей скомпилированной программы
-                GLint loc = glGetUniformLocation(graphicsProgramID, "u_res");
+                GLint loc = glGetUniformLocation(graphicsProgramID, "u_projection");
                 if (loc != -1) {
-                    glUniform2f(loc, 1/(float)width, 1/(float)height);
+                    float projection[16] = {
+                        2.0f / (float)width,  0.0f,                  0.0f,  0.0f,
+                        0.0f,                -2.0f / (float)height,  0.0f,  0.0f,
+                        0.0f,                 0.0f,                 -1.0f,  0.0f,
+                    -1.0f,                 1.0f,                  0.0f,  1.0f
+                    };
+                    glUniformMatrix4fv(loc, 1, GL_FALSE, projection); // загружаем mat4
                 }
                 SDL_Log("width: %d", width);
                 SDL_Log("height: %d", height);
@@ -1934,6 +2022,8 @@ int main(int argc, char* argv[]) {
                 sf::Vector2f pos_rect_all = sf::Vector2f(safeArea.w-size_button_all*1.1+safeArea.x, size_button_all*0.1+safeArea.y);
 #endif
                 sf::Vector2f pos_select_button = pos_rect_all-sf::Vector2f(size_button_all*1.1, 0);
+                sf::Vector2f pos_rotate_button = pos_rect_all-sf::Vector2f(size_button_all*2.2, 0);
+                sf::Vector2f pos_zercal_button = pos_rect_all-sf::Vector2f(size_button_all*3.3, 0);
                 sf::Vector2f pos_save_button = pos_select_button-sf::Vector2f(size_button_all*1.1, 0);
                 sf::Vector2f pos_rect_resize = sf::Vector2f(safeArea.x + safeArea.w * 0.25,safeArea.h * 0.1 + safeArea.y);
                 sf::Vector2f pos_rect_clear = pos_rect_resize+sf::Vector2f(0, safeArea.h*0.12);
@@ -1994,6 +2084,30 @@ int main(int argc, char* argv[]) {
 #endif
                     is_paste = false;
                     paste_struct = std::nullopt;
+                } else if (is_paste && is_click_button(pos_rotate_button, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // rotate button
+                    save_struct& sp = *paste_struct;
+                    save_struct lsp = *paste_struct;
+
+                    for (uint32_t y = 0; y != lsp.sizey; y++) {
+                        for (uint32_t x = 0; x != lsp.sizex; x++) {
+                            uint64_t id = (uint64_t)y * lsp.sizex + x;
+                            uint32_t new_x = lsp.sizey - y - 1;
+                            uint32_t new_y = x;
+                            uint64_t to_id = (uint64_t)new_y * lsp.sizey + new_x;
+                            set_index(sp.data, to_id, get_index(lsp.data, id));
+                        }
+                    }
+                    std::swap(sp.sizex, sp.sizey);
+                } else if (is_paste && is_click_button(pos_zercal_button, sf::Vector2f(size_button_all, size_button_all), click_pos)) { // zercal button
+                    save_struct& sp = *paste_struct;
+                    save_struct lsp = *paste_struct;
+                    for (uint32_t y = 0; y!=sp.sizey; y++) {
+                        for (uint32_t x = 0; x!=sp.sizex; x++) {
+                            uint64_t id = y*sp.sizex+x;
+                            uint64_t to_id = (sp.sizey-y-1)*sp.sizex+x;
+                            set_index(sp.data, to_id, get_index(lsp.data, id));
+                        }
+                    }
                 } else if (is_all_buttons && is_click_button(pos_rect_saves, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // saves button
                     paste_struct = show_saves(window);
                     if (paste_struct) {
@@ -2047,7 +2161,8 @@ int main(int argc, char* argv[]) {
                 } else if (is_all_buttons && is_click_button(pos_rect_change_sps, sf::Vector2f(buttonsWidth, buttonsHeight), click_pos)) { // run/stop button
                     int new_sps = getNumber("enter", "enter sps: ", window);
                     if (new_sps>0) {
-                        sps = new_sps;
+                        max_sps = new_sps;
+                        real_sps = max_sps;
                     }
                     clock_simulate.restart();
                     clock.restart();
@@ -2158,7 +2273,8 @@ int main(int argc, char* argv[]) {
                     if (count==1) {
                         std::optional<int> res = slider_sps.event_to(count, fingers);
                         if (res) {
-                            sps = *res;
+                            max_sps = *res;
+                            real_sps = max_sps;
                         } else {
                             sf::Vector2f newMousePos = sf::Vector2f(fingers[0]->x*width, fingers[0]->y*height);
                             if (is_select==2) {
@@ -2241,7 +2357,8 @@ int main(int argc, char* argv[]) {
                 } else if (event.key.code == sf::Keyboard::F) {
                     int new_sps = getNumber("enter", "enter sps: ", window);
                     if (new_sps>0) {
-                        sps = new_sps;
+                        max_sps = new_sps;
+                        real_sps = max_sps;
                     }
                     clock_simulate.restart();
                     clock.restart();
@@ -2284,50 +2401,69 @@ int main(int argc, char* argv[]) {
 #endif
         }
         last_simulate += clock_simulate.restart().asSeconds();
-        bool calc = last_simulate>=(1.0/sps);
-        while (last_simulate>=(1.0/sps)) {
-            bool calc = last_simulate>=(1.0/sps);
+        bool calc = last_simulate>=(1.0/real_sps);
+        while (last_simulate>=(1.0/real_sps)) {
+            bool calc = last_simulate>=(1.0/real_sps);
             if (calc) {
-                last_simulate -= 1.0/sps;
+                last_simulate -= 1.0/real_sps;
             }
             if (!is_stop && calc) {
+                auto startTime = std::chrono::high_resolution_clock::now();
 #ifndef CPU_MODE
-                gpuRun22d(shader, size, size, SSBO_IN, SSBO_OUT, "sizexy", size);
+                bindSSBO(SSBO_IN, 0);
+                bindSSBO(SSBO_OUT, 1);
+                gpuRun2d(shader, size, size, 16, 16, "sizexy", size);
+                clearBind(0);
+                clearBind(1);
 #endif
 #ifdef CPU_MODE
-#pragma omp parallel for
-                for (uint32_t y = 0; y!=size; y++) {
-                    for (uint32_t x = 0; x!=size; x++) {
-                        //uint32_t x = id % size;
-                        //uint32_t y = id / size;
-                        uint64_t id = x+y*size;
-                        uint32_t neighbors = 0;
-                        if (x > 0 && READ_CEILS[y*size + (x-1)] == 1) neighbors++; // лево
-                        if (x+1 < size && READ_CEILS[y*size + (x+1)] == 1) neighbors++; // право
+                int max_threads = omp_get_max_threads();
+                uint32_t rows_per_thread = size / max_threads;
+                #pragma omp parallel for
+                for (int i = 0; i!=max_threads; i++) {
+                    uint32_t start_y = rows_per_thread*i;
+                    uint32_t end_y = rows_per_thread*i+rows_per_thread;
+                    if (i==max_threads-1) {
+                        end_y = size;
+                    }
+                    uint64_t id = start_y*size;
+                    for (uint32_t y = start_y; y!=end_y; y++) {
+                        for (uint32_t x = 0; x!=size; x++) {
+                            //uint32_t x = id % size;
+                            //uint32_t y = id / size;
+                            uint32_t neighbors = 0;
+                            if (x > 0 && READ_CEILS[y*size + (x-1)] == 1) neighbors++; // лево
+                            if (x+1 < size && READ_CEILS[y*size + (x+1)] == 1) neighbors++; // право
 
-                        if (y+1 < size) {
-                            if (READ_CEILS[(y+1)*size + x] == 1) neighbors++; // низ
-                            if (x > 0 && READ_CEILS[(y+1)*size + (x-1)] == 1) neighbors++; // низ-лево
-                            if (x+1 < size && READ_CEILS[(y+1)*size + (x+1)] == 1) neighbors++; // низ-право
-                        }
+                            if (y+1 < size) {
+                                if (READ_CEILS[(y+1)*size + x] == 1) neighbors++; // низ
+                                if (x > 0 && READ_CEILS[(y+1)*size + (x-1)] == 1) neighbors++; // низ-лево
+                                if (x+1 < size && READ_CEILS[(y+1)*size + (x+1)] == 1) neighbors++; // низ-право
+                            }
 
-                        if (y > 0) {
-                            if (READ_CEILS[(y-1)*size + x] == 1) neighbors++; // верх
-                            if (x > 0 && READ_CEILS[(y-1)*size + (x-1)] == 1) neighbors++; // верх-лево
-                            if (x+1 < size && READ_CEILS[(y-1)*size + (x+1)] == 1) neighbors++; // верх-право
+                            if (y > 0) {
+                                if (READ_CEILS[(y-1)*size + x] == 1) neighbors++; // верх
+                                if (x > 0 && READ_CEILS[(y-1)*size + (x-1)] == 1) neighbors++; // верх-лево
+                                if (x+1 < size && READ_CEILS[(y-1)*size + (x+1)] == 1) neighbors++; // верх-право
+                            }
+                            bool current = READ_CEILS[id];
+                            bool result = false;
+                            if (current == 1) {
+                                if (neighbors == 2 || neighbors == 3) result = true; // Выжил
+                            } else {
+                                if (neighbors == 3) result = true; // Родился
+                            }
+                            WRITE_CEILS[id] = result;
+                            id++;
                         }
-                        bool current = READ_CEILS[id];
-                        bool result = false;
-                        if (current == 1) {
-                            if (neighbors == 2 || neighbors == 3) result = true; // Выжил
-                        } else {
-                            if (neighbors == 3) result = true; // Родился
-                        }
-                        WRITE_CEILS[id] = result;
                     }
                 }
 #endif
                 active = !active;
+                auto endTime = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double, std::milli> elapsed = endTime - startTime;
+                double time = elapsed.count()/1000.0;
+                real_sps = std::min((int)(1.0/time), max_sps);
             }
         }
 #ifndef ANDROID_MODE
@@ -2349,15 +2485,15 @@ int main(int argc, char* argv[]) {
         // rect.setOutlineColor(sf::Color(100, 100, 100));
         std::pair<sf::Vector2i, sf::Vector2i> view = get_view();
         rects.reserve(size*size);
-        uint32_t sizey = (view.second.x-view.first.x+1);
-        rects.resize(sizey*(view.second.y-view.first.y+1));
+        uint32_t sizey = (view.second.x-view.first.x);
+        rects.resize(sizey*(view.second.y-view.first.y));
         // std::cout << rects.size() << std::endl;
 #pragma omp parallel for
         // for (uint32_t i = view.first.y*size+view.first.x; i!=std::min(size*size, view.second.y*size+view.second.x+1); i++) {
-        for (uint32_t y = view.first.y; y!=view.second.y+1; y++) {
+        for (uint32_t y = view.first.y; y!=view.second.y; y++) {
             // uint32_t x = i%size;
             // if (view.first.x<=x && x<=view.second.x) {
-            for (uint32_t x = view.first.x; x!=view.second.x+1; x++) {
+            for (uint32_t x = view.first.x; x!=view.second.x; x++) {
                 // uint32_t y = i/size;
                 uint32_t i = y*size+x;
                 // #ifdef CPU_MODE
@@ -2629,6 +2765,46 @@ int main(int argc, char* argv[]) {
                 build_icon.unuse();
             }
 #endif
+            // render rotate button
+            sf::Vector2f pos_rotate_button = start_pos_button-sf::Vector2f(size_button*2.2, 0);
+            sf::RectangleShape rotate_button;
+            rotate_button.setSize(sf::Vector2f(size_button, size_button));
+            rotate_button.setPosition(pos_rotate_button);
+#ifndef ANDROID_MODE
+            if (is_paste) {
+                rotate_button.setTexture(&rotate_icon);
+                window.draw(rotate_button);
+            }
+#else
+            if (is_paste) {
+                rotate_button.setTexture();
+                rotate_icon.use();
+                rotate_button.setTransparency();
+                rotate_button.render();
+                rotate_button.setUnTransparency();
+                rotate_icon.unuse();
+            }
+#endif
+            // render zercal button
+            sf::Vector2f pos_zercal_button = start_pos_button-sf::Vector2f(size_button*3.3, 0);
+            sf::RectangleShape zercal_button;
+            zercal_button.setSize(sf::Vector2f(size_button, size_button));
+            zercal_button.setPosition(pos_zercal_button);
+#ifndef ANDROID_MODE
+            if (is_paste) {
+                zercal_button.setTexture(&zercal_icon);
+                window.draw(zercal_button);
+            }
+#else
+            if (is_paste) {
+                zercal_button.setTexture();
+                zercal_icon.use();
+                zercal_button.setTransparency();
+                zercal_button.render();
+                zercal_button.setUnTransparency();
+                zercal_icon.unuse();
+            }
+#endif
             // render save button
             if (is_select==3) {
                 sf::Vector2f pos_save_button = pos_select_button-sf::Vector2f(size_button*1.1, 0);
@@ -2657,14 +2833,14 @@ int main(int argc, char* argv[]) {
         slider_sps.setPosition(pos_slider);
         slider_sps.setSize(sf::Vector2f(safeArea.w*0.2, safeArea.h*0.02));
 #ifdef ANDROID_MODE
-        slider_sps.render(sps);
+        slider_sps.render(max_sps);
 #else
-        slider_sps.render(window, sps);
+        slider_sps.render(window, max_sps);
 #endif
         sf::Text text_sps;
         text_sps.setPosition(pos_slider+sf::Vector2f(safeArea.w*0.22, 0));
         text_sps.setCharacterSize(safeArea.h*0.02);
-        text_sps.setString(std::to_string(sps)+" SPS");
+        text_sps.setString(std::to_string(max_sps)+" SPS");
         text_sps.setFillColor(sf::Color(46, 204, 113));
         text_sps.setFont(defaultFont);
 #ifdef ANDROID_MODE
@@ -2675,7 +2851,7 @@ int main(int argc, char* argv[]) {
 #ifdef ANDROID_MODE
         // render title
         float dt = clock.restart().asSeconds();
-        std::string title = "FPS="+std::to_string((int)(1/dt))+", rects="+std::to_string(size_rects) + "("+std::to_string(view.second.x-view.first.x+1)+"x"+std::to_string(view.second.y-view.first.y+1)+")";
+        std::string title = "FPS="+std::to_string((int)(1/dt))+", SPS="+std::to_string(real_sps)+", rects="+std::to_string(size_rects) + "("+std::to_string(view.second.x-view.first.x)+"x"+std::to_string(view.second.y-view.first.y)+")";
         sf::RectangleShape title_rect;
         title_rect.setPosition(sf::Vector2f(0,0));
         title_rect.setSize(sf::Vector2f(width, safeArea.h*0.05+safeArea.y));
@@ -2692,7 +2868,7 @@ int main(int argc, char* argv[]) {
         float dt = clock.restart().asSeconds();
 #endif
 #ifndef ANDROID_MODE
-        std::string title = "Game of Live (FPS="+std::to_string((int)(1/dt))+", SPS="+std::to_string(sps)+", rects="+std::to_string(size_rects) + "("+std::to_string(view.second.x-view.first.x+1)+"x"+std::to_string(view.second.y-view.first.y+1)+"))";
+        std::string title = "Game of Live (FPS="+std::to_string((int)(1/dt))+", SPS="+std::to_string(real_sps)+", rects="+std::to_string(size_rects) + "("+std::to_string(view.second.x-view.first.x)+"x"+std::to_string(view.second.y-view.first.y)+"))";
         window.setTitle(title);
         window.display();
 #else
